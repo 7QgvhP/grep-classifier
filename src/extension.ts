@@ -265,15 +265,14 @@ export async function activate(context: vscode.ExtensionContext) {
     // web-tree-sitterの初期化とC言語パーサーのロード
     let parser: Parser;
     try {
-        await Parser.init({
-            locateFile(scriptName: string) {
-                // Windows環境でのパス区切り文字（\）をスラッシュ（/）に置換してWASMロードエラーを防ぐ
-                return path.join(context.extensionPath, 'bin', scriptName).replace(/\\/g, '/');
-            }
-        });
-        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm').replace(/\\/g, '/');
+        // オプションなしで初期化することで、node_modules内のtree-sitter.wasmを正常にロードさせる
+        await Parser.init();
+        // C言語のWASMファイルをバイナリとして直接読み込む（Windowsのパス問題の完全な回避）
+        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm');
+        const wasmBuffer = fs.readFileSync(cLangWasmPath);
+        const cLang = await Parser.Language.load(wasmBuffer);
 
-        const cLang = await Parser.Language.load(cLangWasmPath);
+
         parser = new Parser();
         parser.setLanguage(cLang);
     } catch (err) {
