@@ -169,8 +169,66 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
             break;
         }
 
-        // 1. 定義 (Definition) の判定
-        // 変数宣言、初期化宣言、引数宣言
+        // --- 1. 出力 (Output - 書き込み) の優先判定 ---
+        // 代入式の左辺 (例: hoge = 1, hoge[0] = 1, hoge.val = 1 など)
+        if (parent.type === 'assignment_expression') {
+            const left = parent.childForFieldName('left');
+            if (left && left.text.includes(identifierText)) {
+                return '出力';
+            }
+        }
+        // インクリメント/デクリメント (例: hoge++, --hoge)
+        if (parent.type === 'update_expression') {
+            return '出力';
+        }
+        // アドレス参照 (例: &hoge)
+        if (parent.type === 'pointer_expression') {
+            const operator = parent.child(0);
+            if (operator && operator.text === '&') {
+                return '出力';
+            }
+        }
+
+        // --- 2. 入力 (Input - 参照) の優先判定 ---
+        // 代入式の右辺
+        if (parent.type === 'assignment_expression') {
+            const right = parent.childForFieldName('right');
+            if (right && right.text.includes(identifierText)) {
+                return '入力';
+            }
+        }
+        // 初期化宣言の右辺値 (例: int temp = hoge_array[0] の右辺側)
+        if (parent.type === 'init_declarator') {
+            const value = parent.childForFieldName('value');
+            if (value && value.text.includes(identifierText)) {
+                return '入力';
+            }
+        }
+        // 条件文、ループの条件式 (例: if (hoge), while (hoge))
+        if (parent.type === 'if_statement' || parent.type === 'while_statement' || parent.type === 'for_statement') {
+            const condition = parent.childForFieldName('condition');
+            if (condition && condition.text.includes(identifierText)) {
+                return '入力';
+            }
+        }
+        // 関数の実引数リスト (例: func(hoge))
+        if (parent.type === 'argument_list') {
+            return '入力';
+        }
+        // その他一般的な値の参照を伴う式
+        if (
+            [
+                'binary_expression',
+                'return_statement',
+                'switch_statement',
+                'case_statement'
+            ].includes(parent.type)
+        ) {
+            return '入力';
+        }
+
+        // --- 3. 定義 (Definition) の判定 ---
+        // 変数宣言、初期化宣言の左辺、引数宣言
         if (parent.type === 'declaration' || parent.type === 'init_declarator' || parent.type === 'parameter_declaration') {
             const declarator = parent.childForFieldName('declarator');
             if (declarator && declarator.text.includes(identifierText)) {
@@ -202,60 +260,13 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
             return '定義';
         }
 
-        // 2. 出力 (Output - 書き込み) の判定
-        // 代入式の左辺 (例: hoge = 1, hoge[0] = 1, hoge.val = 1 など)
-        if (parent.type === 'assignment_expression') {
-            const left = parent.childForFieldName('left');
-            if (left && left.text.includes(identifierText)) {
-                return '出力';
-            }
-        }
-        // インクリメント/デクリメント (例: hoge++, --hoge)
-        if (parent.type === 'update_expression') {
-            return '出力';
-        }
-        // アドレス参照 (例: &hoge)
-        if (parent.type === 'pointer_expression') {
-            const operator = parent.child(0);
-            if (operator && operator.text === '&') {
-                return '出力';
-            }
-        }
-
-        // 3. 入力 (Input - 参照) の判定
-        // 代入式の右辺
-        if (parent.type === 'assignment_expression') {
-            const right = parent.childForFieldName('right');
-            if (right && right.text.includes(identifierText)) {
-                return '入力';
-            }
-        }
-        // 条件文、ループの条件式 (例: if (hoge), while (hoge))
-        if (parent.type === 'if_statement' || parent.type === 'while_statement' || parent.type === 'for_statement') {
-            const condition = parent.childForFieldName('condition');
-            if (condition && condition.text.includes(identifierText)) {
-                return '入力';
-            }
-        }
-        // その他一般的な式の中での参照 (二項演算、リターン文、関数の実引数など)
-        if (
-            [
-                'binary_expression',
-                'return_statement',
-                'switch_statement',
-                'case_statement',
-                'argument_list'
-            ].includes(parent.type)
-        ) {
-            return '入力';
-        }
-
         // 次の祖先へ
         current = parent;
     }
 
     return 'その他';
 }
+
 
 // 拡張機能のアクティベート処理
 export async function activate(context: vscode.ExtensionContext) {
