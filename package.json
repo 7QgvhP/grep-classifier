@@ -1,0 +1,58 @@
+{
+  "name": "c-grep-classifier",
+  "displayName": "C-Grep Classifier",
+  "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
+  "version": "1.0.0",
+
+  "publisher": "developer",
+
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "c-grep-classifier-sidebar",
+          "title": "C-Grep Classifier",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "c-grep-classifier-sidebar": [
+        {
+          "id": "cGrepClassifierView",
+          "name": "データフロー分類結果"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "c-grep-classifier.search",
+        "title": "C-Grep: データフロー分類検索を実行"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.20.8"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^16.11.7",
+    "typescript": "^4.9.5"
+  }
+}
