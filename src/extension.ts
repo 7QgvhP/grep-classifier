@@ -340,7 +340,15 @@ export async function activate(context: vscode.ExtensionContext) {
         });
     });
 
-    // ファイルを開き、該当キーワード部分を選択状態にするコマンド
+    // 検索ヒット箇所をハイライトするためのデコレーション（テーマ色に連動）
+    const searchHighlightDecorationType = vscode.window.createTextEditorDecorationType({
+        backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+        border: '1px solid',
+        borderColor: new vscode.ThemeColor('editor.findMatchHighlightBorder'),
+        borderRadius: '3px'
+    });
+
+    // ファイルを開き、該当キーワード部分を選択状態にしてハイライトするコマンド
     const openFileCommand = vscode.commands.registerCommand(
         'c-grep-classifier.openFile',
         async (uri: vscode.Uri, line: number, charStart: number, charEnd: number) => {
@@ -352,10 +360,19 @@ export async function activate(context: vscode.ExtensionContext) {
             const endPos = new vscode.Position(line, charEnd);
             editor.selection = new vscode.Selection(startPos, endPos);
             editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenter);
+
+            // 既存の表示中エディタすべてのハイライトをクリア
+            for (const visibleEditor of vscode.window.visibleTextEditors) {
+                visibleEditor.setDecorations(searchHighlightDecorationType, []);
+            }
+
+            // 新しく開いた該当箇所をハイライト
+            const range = new vscode.Range(startPos, endPos);
+            editor.setDecorations(searchHighlightDecorationType, [range]);
         }
     );
 
-    context.subscriptions.push(searchCommand, openFileCommand);
+    context.subscriptions.push(searchCommand, openFileCommand, searchHighlightDecorationType);
 }
 
 export function deactivate() {}
