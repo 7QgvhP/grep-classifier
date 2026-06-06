@@ -13,7 +13,11 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:c-grep-classifier.search",
+    "onView:cGrepClassifierView"
+  ],
+
   "contributes": {
     "viewsContainers": {
       "activitybar": [

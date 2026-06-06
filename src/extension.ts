@@ -267,10 +267,12 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         await Parser.init({
             locateFile(scriptName: string) {
-                return path.join(context.extensionPath, 'bin', scriptName);
+                // Windows環境でのパス区切り文字（\）をスラッシュ（/）に置換してWASMロードエラーを防ぐ
+                return path.join(context.extensionPath, 'bin', scriptName).replace(/\\/g, '/');
             }
         });
-        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm');
+        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm').replace(/\\/g, '/');
+
         const cLang = await Parser.Language.load(cLangWasmPath);
         parser = new Parser();
         parser.setLanguage(cLang);
