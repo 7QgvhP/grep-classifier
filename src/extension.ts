@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Parser from 'web-tree-sitter';
 
-
 // 分類カテゴリの定義
 type DataFlowCategory = '入力' | '出力' | '定義' | 'コメント' | 'その他';
 
@@ -17,82 +16,14 @@ interface GrepMatch {
     category: DataFlowCategory;
 }
 
-// ツリービューで表示するカスタムツリーアイテム
-class GrepTreeItem extends vscode.TreeItem {
-    constructor(
-        public readonly label: string,
-        public readonly collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly contextValue: string,
-        public readonly match?: GrepMatch
-    ) {
-        super(label, collapsibleState);
-        if (match) {
-            this.tooltip = match.content.trim();
-            this.description = path.basename(match.fileUri.fsPath);
-            // アイテムクリック時に該当箇所を選択して開くコマンドを設定
-            this.command = {
-                command: 'c-grep-classifier.openFile',
-                title: 'ファイルを開く',
-                arguments: [match.fileUri, match.line, match.charStart, match.charEnd]
-            };
-        }
-    }
-}
-
-// ツリービューにデータを提供するデータプロバイダー
-class GrepResultProvider implements vscode.TreeDataProvider<GrepTreeItem> {
-    private _onDidChangeTreeData: vscode.EventEmitter<GrepTreeItem | undefined | null | void> = new vscode.EventEmitter<GrepTreeItem | undefined | null | void>();
-    readonly onDidChangeTreeData: vscode.Event<GrepTreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
-
-    // カテゴリごとの検索結果
-    private categories: Record<DataFlowCategory, GrepMatch[]> = {
-        '入力': [],
-        '出力': [],
-        '定義': [],
-        'コメント': [],
-        'その他': []
-    };
-
-    // 検索結果の更新
-    refresh(matches: GrepMatch[]): void {
-        this.categories = {
-            '入力': [],
-            '出力': [],
-            '定義': [],
-            'コメント': [],
-            'その他': []
-        };
-        for (const m of matches) {
-            this.categories[m.category].push(m);
-        }
-        this._onDidChangeTreeData.fire();
-    }
-
-    getTreeItem(element: GrepTreeItem): vscode.TreeItem {
-        return element;
-    }
-
-    getChildren(element?: GrepTreeItem): Thenable<GrepTreeItem[]> {
-        if (!element) {
-            // ルート階層：各カテゴリの件数を表示
-            const items = (Object.keys(this.categories) as DataFlowCategory[]).map(cat => {
-                const count = this.categories[cat].length;
-                return new GrepTreeItem(`${cat} (${count}件)`, vscode.TreeItemCollapsibleState.Collapsed, 'category');
-            });
-            return Promise.resolve(items);
-        } else if (element.contextValue === 'category') {
-            // カテゴリ階層：一致箇所のファイル名と行番号を表示
-            const catName = element.label.split(' (')[0] as DataFlowCategory;
-            const matches = this.categories[catName] || [];
-            const items = matches.map(m => {
-                const fileName = path.basename(m.fileUri.fsPath);
-                const label = `${fileName}:${m.line + 1} - ${m.content.trim()}`;
-                return new GrepTreeItem(label, vscode.TreeItemCollapsibleState.None, 'match', m);
-            });
-            return Promise.resolve(items);
-        }
-        return Promise.resolve([]);
-    }
+// Webviewに受け渡すためのシリアライズ可能な一致情報インターフェース
+interface GrepMatchSerializable {
+    fileUriStr: string;
+    line: number;
+    charStart: number;
+    charEnd: number;
+    content: string;
+    category: DataFlowCategory;
 }
 
 // ASTの各ノードから検索クエリに一致する識別子やコメント等を抽出し、データフロー分類を行う
@@ -170,18 +101,15 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         }
 
         // --- 1. 出力 (Output - 書き込み) の優先判定 ---
-        // 代入式の左辺 (例: hoge = 1, hoge[0] = 1, hoge.val = 1 など)
         if (parent.type === 'assignment_expression') {
             const left = parent.childForFieldName('left');
             if (left && left.text.includes(identifierText)) {
                 return '出力';
             }
         }
-        // インクリメント/デクリメント (例: hoge++, --hoge)
         if (parent.type === 'update_expression') {
             return '出力';
         }
-        // アドレス参照 (例: &hoge)
         if (parent.type === 'pointer_expression') {
             const operator = parent.child(0);
             if (operator && operator.text === '&') {
@@ -190,32 +118,27 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         }
 
         // --- 2. 入力 (Input - 参照) の優先判定 ---
-        // 代入式の右辺
         if (parent.type === 'assignment_expression') {
             const right = parent.childForFieldName('right');
             if (right && right.text.includes(identifierText)) {
                 return '入力';
             }
         }
-        // 初期化宣言の右辺値 (例: int temp = hoge_array[0] の右辺側)
         if (parent.type === 'init_declarator') {
             const value = parent.childForFieldName('value');
             if (value && value.text.includes(identifierText)) {
                 return '入力';
             }
         }
-        // 条件文、ループの条件式 (例: if (hoge), while (hoge))
         if (parent.type === 'if_statement' || parent.type === 'while_statement' || parent.type === 'for_statement') {
             const condition = parent.childForFieldName('condition');
             if (condition && condition.text.includes(identifierText)) {
                 return '入力';
             }
         }
-        // 関数の実引数リスト (例: func(hoge))
         if (parent.type === 'argument_list') {
             return '入力';
         }
-        // その他一般的な値の参照を伴う式
         if (
             [
                 'binary_expression',
@@ -228,28 +151,24 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         }
 
         // --- 3. 定義 (Definition) の判定 ---
-        // 変数宣言、初期化宣言の左辺、引数宣言
         if (parent.type === 'declaration' || parent.type === 'init_declarator' || parent.type === 'parameter_declaration') {
             const declarator = parent.childForFieldName('declarator');
             if (declarator && declarator.text.includes(identifierText)) {
                 return '定義';
             }
         }
-        // 関数定義の関数名部分
         if (parent.type === 'function_definition') {
             const declarator = parent.childForFieldName('declarator');
             if (declarator && declarator.text.includes(identifierText)) {
                 return '定義';
             }
         }
-        // マクロ定義の名前
         if (parent.type === 'preproc_def' || parent.type === 'preproc_function_def') {
             const nameNode = parent.childForFieldName('name');
             if (nameNode && nameNode.text === identifierText) {
                 return '定義';
             }
         }
-        // 構造体・共用体・列挙型の定義およびフィールド宣言
         if (parent.type === 'struct_specifier' || parent.type === 'union_specifier' || parent.type === 'enum_specifier') {
             const nameNode = parent.childForFieldName('name');
             if (nameNode && nameNode.text === identifierText) {
@@ -260,72 +179,113 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
             return '定義';
         }
 
-        // 次の祖先へ
         current = parent;
     }
 
     return 'その他';
 }
 
+// Webview View のプロバイダー定義
+class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
+    public static readonly viewType = 'cGrepClassifierView';
+    private _view?: vscode.WebviewView;
 
-// 拡張機能のアクティベート処理
-export async function activate(context: vscode.ExtensionContext) {
-    const provider = new GrepResultProvider();
-    vscode.window.registerTreeDataProvider('cGrepClassifierView', provider);
+    constructor(
+        private readonly _extensionUri: vscode.Uri,
+        private readonly _parser: Parser,
+        private readonly _searchHighlightDecorationType: vscode.TextEditorDecorationType
+    ) {}
 
-    // web-tree-sitterの初期化とC言語パーサーのロード
-    let parser: Parser;
-    try {
-        // オプションなしで初期化することで、node_modules内のtree-sitter.wasmを正常にロードさせる
-        await Parser.init();
-        // C言語のWASMファイルをバイナリとして直接読み込む（Windowsのパス問題の完全な回避）
-        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm');
-        const wasmBuffer = fs.readFileSync(cLangWasmPath);
-        const cLang = await Parser.Language.load(wasmBuffer);
+    public resolveWebviewView(
+        webviewView: vscode.WebviewView,
+        context: vscode.WebviewViewResolveContext,
+        _token: vscode.CancellationToken
+    ) {
+        this._view = webviewView;
 
+        // Webviewのオプション設定（JSの有効化とルートパスの制限）
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this._extensionUri]
+        };
 
-        parser = new Parser();
-        parser.setLanguage(cLang);
-    } catch (err) {
-        vscode.window.showErrorMessage(`Parserの初期化に失敗しました。WASMファイルが正しく配置されているか確認してください: ${err}`);
-        return;
+        // 初期HTMLの設定
+        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+        // Webview側からのメッセージ受信時のイベントリスナー
+        webviewView.webview.onDidReceiveMessage(async (data) => {
+            switch (data.type) {
+                case 'search': {
+                    const query = data.query;
+                    if (!query) {
+                        return;
+                    }
+                    const rawMatches = await this._performSearch(query);
+                    // Webviewに渡すシリアライズ形式への変換
+                    const matches: GrepMatchSerializable[] = rawMatches.map(m => ({
+                        fileUriStr: m.fileUri.toString(),
+                        line: m.line,
+                        charStart: m.charStart,
+                        charEnd: m.charEnd,
+                        content: m.content,
+                        category: m.category
+                    }));
+                    webviewView.webview.postMessage({ type: 'results', matches, query });
+                    break;
+                }
+                case 'openFile': {
+                    const { fileUriStr, line, charStart, charEnd } = data;
+                    try {
+                        const uri = vscode.Uri.parse(fileUriStr);
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        const editor = await vscode.window.showTextDocument(doc);
+                        
+                        const startPos = new vscode.Position(line, charStart);
+                        const endPos = new vscode.Position(line, charEnd);
+                        editor.selection = new vscode.Selection(startPos, endPos);
+                        editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenter);
+
+                        // 既存のすべての表示中エディタのデコレーションをクリア
+                        for (const visibleEditor of vscode.window.visibleTextEditors) {
+                            visibleEditor.setDecorations(this._searchHighlightDecorationType, []);
+                        }
+
+                        // 新規にデコレーションを設定してハイライト
+                        const range = new vscode.Range(startPos, endPos);
+                        editor.setDecorations(this._searchHighlightDecorationType, [range]);
+                    } catch (err) {
+                        vscode.window.showErrorMessage(`ファイルを開くことができませんでした: ${err}`);
+                    }
+                    break;
+                }
+            }
+        });
     }
 
-    // 検索分類コマンドの登録
-    const searchCommand = vscode.commands.registerCommand('c-grep-classifier.search', async () => {
-        const query = await vscode.window.showInputBox({
-            prompt: 'データフロー分類するキーワード（変数名など）を入力してください',
-            placeHolder: '例: hoge'
-        });
-
-        if (!query) {
-            return;
-        }
-
+    // C言語ファイルへのGrep検索とデータフロー分類の実行
+    private async _performSearch(query: string): Promise<GrepMatch[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
             vscode.window.showInformationMessage('ワークスペースが開かれていません。');
-            return;
+            return [];
         }
 
-        vscode.window.withProgress({
+        const allMatches: GrepMatch[] = [];
+
+        await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: "C言語ファイルを分析中...",
             cancellable: false
         }, async () => {
             const files = await vscode.workspace.findFiles('**/*.{c,h}', '**/node_modules/**');
-            const allMatches: GrepMatch[] = [];
-
             for (const file of files) {
                 try {
                     const content = fs.readFileSync(file.fsPath, 'utf-8');
-                    // 1. パフォーマンス最適化のため、まずは高速テキスト検索でキーワードが含まれるかチェック
+                    // パフォーマンス最適化のため、まずは高速に簡易チェック
                     if (!content.includes(query)) {
                         continue;
                     }
-
-                    // 2. キーワードが含まれるファイルのみ Tree-sitter でパース
-                    const tree = parser.parse(content);
+                    const tree = this._parser.parse(content);
                     const lines = content.split(/\r?\n/);
                     const fileMatches = findMatchesInTree(tree.rootNode, query, file, lines);
                     allMatches.push(...fileMatches);
@@ -333,13 +293,343 @@ export async function activate(context: vscode.ExtensionContext) {
                     console.error(`ファイルの解析に失敗しました: ${file.fsPath}`, err);
                 }
             }
-
-            // 結果を表示
-            provider.refresh(allMatches);
-            vscode.window.showInformationMessage(`分析完了: ${allMatches.length} 件の一致が見つかりました。`);
         });
-    });
 
+        return allMatches;
+    }
+
+    // Webviewに表示するHTMLを構築
+    private _getHtmlForWebview(webview: vscode.Webview): string {
+        const nonce = getNonce();
+
+        return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <style>
+        body {
+            padding: 8px 10px;
+            color: var(--vscode-foreground);
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            background-color: var(--vscode-sideBar-background);
+        }
+        
+        /* 検索コンテナの配置 */
+        .search-container {
+            display: flex;
+            margin-bottom: 12px;
+            position: sticky;
+            top: 0;
+            background-color: var(--vscode-sideBar-background);
+            z-index: 10;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.2));
+        }
+        .search-input {
+            flex-grow: 1;
+            padding: 4px 6px;
+            font-size: var(--vscode-font-size);
+            font-family: var(--vscode-font-family);
+            color: var(--vscode-input-foreground);
+            background-color: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border, transparent);
+            border-radius: 2px;
+            outline: none;
+        }
+        .search-input:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+        .search-button {
+            margin-left: 6px;
+            padding: 4px 12px;
+            font-size: var(--vscode-font-size);
+            font-family: var(--vscode-font-family);
+            color: var(--vscode-button-foreground);
+            background-color: var(--vscode-button-background);
+            border: none;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .search-button:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        /* カテゴリアコーディオン */
+        .category-container {
+            margin-bottom: 6px;
+            border-radius: 2px;
+            overflow: hidden;
+            border: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
+        }
+        .category-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 8px;
+            font-weight: bold;
+            cursor: pointer;
+            user-select: none;
+            background-color: var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.1));
+            color: var(--vscode-sideBarSectionHeader-foreground);
+        }
+        .category-header:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .category-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .category-count {
+            background-color: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
+            padding: 1px 5px;
+            border-radius: 10px;
+            font-size: 0.85em;
+        }
+        
+        .category-items {
+            display: none;
+            padding: 2px 0;
+            background-color: rgba(128, 128, 128, 0.02);
+        }
+        .category-items.expanded {
+            display: block;
+        }
+        
+        .match-item {
+            padding: 6px 10px;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.08);
+        }
+        .match-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .match-file {
+            font-weight: bold;
+            font-size: 0.9em;
+            color: var(--vscode-textLink-foreground);
+            margin-bottom: 2px;
+        }
+        .match-code {
+            font-family: var(--vscode-editor-font-family, monospace);
+            font-size: 0.85em;
+            white-space: pre-wrap;
+            word-break: break-all;
+            opacity: 0.8;
+        }
+        
+        .info-text {
+            text-align: center;
+            opacity: 0.6;
+            margin-top: 20px;
+            font-size: 0.95em;
+        }
+        
+        /* カテゴリ毎の左線ボーダーワンポイント */
+        .cat-input { border-left: 3px solid var(--vscode-charts-blue, #3794ff); }
+        .cat-output { border-left: 3px solid var(--vscode-charts-red, #e06c75); }
+        .cat-def { border-left: 3px solid var(--vscode-charts-green, #98c379); }
+        .cat-comment { border-left: 3px solid var(--vscode-charts-gray, #7f848e); }
+        .cat-other { border-left: 3px solid var(--vscode-charts-orange, #abb2bf); }
+    </style>
+</head>
+<body>
+    <div class="search-container">
+        <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力..." />
+        <button id="search-button" class="search-button">検索</button>
+    </div>
+    
+    <div id="results-container">
+        <div class="info-text">キーワードを入力して検索してください。</div>
+    </div>
+
+    <script nonce="${nonce}">
+        const vscode = acquireVsCodeApi();
+        const searchInput = document.getElementById('search-input');
+        const searchButton = document.getElementById('search-button');
+        const resultsContainer = document.getElementById('results-container');
+
+        // 前回の状態を復元
+        const previousState = vscode.getState();
+        if (previousState && previousState.query) {
+            searchInput.value = previousState.query;
+            if (previousState.html) {
+                resultsContainer.innerHTML = previousState.html;
+            }
+        }
+
+        function triggerSearch() {
+            const query = searchInput.value.trim();
+            if (query) {
+                resultsContainer.innerHTML = '<div class="info-text">分析中...</div>';
+                vscode.postMessage({ type: 'search', query: query });
+            }
+        }
+
+        searchButton.addEventListener('click', triggerSearch);
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                triggerSearch();
+            }
+        });
+
+        // 拡張機能本体からのデータ受取
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.type === 'results') {
+                renderResults(message.matches, message.query);
+            }
+        });
+
+        // アコーディオンの展開・折りたたみ
+        function toggleCategory(id) {
+            const items = document.getElementById(id);
+            if (items) {
+                items.classList.toggle('expanded');
+                // 状態を維持するためにHTML全体をステートに記録
+                saveState();
+            }
+        }
+
+        // 一致箇所クリック時の処理
+        function openFile(fileUriStr, line, charStart, charEnd) {
+            vscode.postMessage({
+                type: 'openFile',
+                fileUriStr: fileUriStr,
+                line: line,
+                charStart: charStart,
+                charEnd: charEnd
+            });
+        }
+
+        // イベントデリゲーションによるクリックの検知と処理
+        resultsContainer.addEventListener('click', (e) => {
+            const target = e.target.closest('[data-action]');
+            if (!target) {
+                return;
+            }
+
+            const action = target.getAttribute('data-action');
+            if (action === 'toggle') {
+                const targetId = target.getAttribute('data-target');
+                toggleCategory(targetId);
+            } else if (action === 'open') {
+                const uriStr = target.getAttribute('data-uri');
+                const line = parseInt(target.getAttribute('data-line'), 10);
+                const charStart = parseInt(target.getAttribute('data-start'), 10);
+                const charEnd = parseInt(target.getAttribute('data-end'), 10);
+                openFile(uriStr, line, charStart, charEnd);
+            }
+        });
+
+        // ステートの保存
+        function saveState() {
+            vscode.setState({
+                query: searchInput.value.trim(),
+                html: resultsContainer.innerHTML
+            });
+        }
+
+        // 検索結果のHTML生成と描画
+        function renderResults(matches, query) {
+            if (!matches || matches.length === 0) {
+                resultsContainer.innerHTML = '<div class="info-text">一致する箇所が見つかりませんでした。</div>';
+                saveState();
+                return;
+            }
+
+            const cats = {
+                '入力': { class: 'cat-input', list: [] },
+                '出力': { class: 'cat-output', list: [] },
+                '定義': { class: 'cat-def', list: [] },
+                'コメント': { class: 'cat-comment', list: [] },
+                'その他': { class: 'cat-other', list: [] }
+            };
+
+            matches.forEach(m => {
+                if (cats[m.category]) {
+                    cats[m.category].list.push(m);
+                }
+            });
+
+            let html = '';
+            let catIndex = 0;
+            
+            for (const catName in cats) {
+                const cat = cats[catName];
+                const count = cat.list.length;
+                if (count === 0) continue;
+
+                const listId = 'cat-items-' + catIndex;
+                html += \`
+                <div class="category-container \${cat.class}">
+                    <div class="category-header" data-action="toggle" data-target="\${listId}">
+                        <div class="category-title">
+                            <span>\${catName}</span>
+                            <span class="category-count">\${count}</span>
+                        </div>
+                        <span class="arrow">▼</span>
+                    </div>
+                    <div id="\${listId}" class="category-items expanded">
+                \`;
+
+                cat.list.forEach(m => {
+                    const uriStr = m.fileUriStr;
+                    // デコードしてパスからファイル名を取得
+                    const decodedUri = decodeURIComponent(uriStr);
+                    const fileName = decodedUri.substring(decodedUri.lastIndexOf('/') + 1);
+                    const codeSnippet = m.content.trim();
+                    
+                    html += \`
+                        <div class="match-item" data-action="open" data-uri="\${uriStr}" data-line="\${m.line}" data-start="\${m.charStart}" data-end="\${m.charEnd}">
+                            <div class="match-file">\${fileName}:\u0024{m.line + 1}</div>
+                            <div class="match-code">\${escapeHtml(codeSnippet)}</div>
+                        </div>
+                    \`;
+                });
+
+                html += \`
+                    </div>
+                </div>
+                \`;
+                catIndex++;
+            }
+
+            resultsContainer.innerHTML = html;
+            saveState();
+        }
+
+        // HTML特殊文字のエスケープ
+        function escapeHtml(str) {
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>`;
+    }
+}
+
+// セキュリティ検証用 nonce の生成
+function getNonce() {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+}
+
+// 拡張機能のアクティベート処理
+export async function activate(context: vscode.ExtensionContext) {
     // 検索ヒット箇所をハイライトするためのデコレーション（テーマ色に連動）
     const searchHighlightDecorationType = vscode.window.createTextEditorDecorationType({
         backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
@@ -348,31 +638,38 @@ export async function activate(context: vscode.ExtensionContext) {
         borderRadius: '3px'
     });
 
-    // ファイルを開き、該当キーワード部分を選択状態にしてハイライトするコマンド
-    const openFileCommand = vscode.commands.registerCommand(
-        'c-grep-classifier.openFile',
-        async (uri: vscode.Uri, line: number, charStart: number, charEnd: number) => {
-            const doc = await vscode.workspace.openTextDocument(uri);
-            const editor = await vscode.window.showTextDocument(doc);
-            
-            // 該当箇所の選択範囲を設定してスクロール
-            const startPos = new vscode.Position(line, charStart);
-            const endPos = new vscode.Position(line, charEnd);
-            editor.selection = new vscode.Selection(startPos, endPos);
-            editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenter);
+    // web-tree-sitterの初期化とC言語パーサーのロード
+    let parser: Parser;
+    try {
+        await Parser.init();
+        const cLangWasmPath = path.join(context.extensionPath, 'bin', 'tree-sitter-c.wasm');
+        const wasmBuffer = fs.readFileSync(cLangWasmPath);
+        const cLang = await Parser.Language.load(wasmBuffer);
 
-            // 既存の表示中エディタすべてのハイライトをクリア
-            for (const visibleEditor of vscode.window.visibleTextEditors) {
-                visibleEditor.setDecorations(searchHighlightDecorationType, []);
-            }
+        parser = new Parser();
+        parser.setLanguage(cLang);
+    } catch (err) {
+        vscode.window.showErrorMessage(`Parserの初期化に失敗しました。WASMファイルが正しく配置されているか確認してください: ${err}`);
+        return;
+    }
 
-            // 新しく開いた該当箇所をハイライト
-            const range = new vscode.Range(startPos, endPos);
-            editor.setDecorations(searchHighlightDecorationType, [range]);
-        }
+    // Webview View Provider のインスタンス化と登録
+    const provider = new GrepWebviewViewProvider(
+        context.extensionUri,
+        parser,
+        searchHighlightDecorationType
     );
 
-    context.subscriptions.push(searchCommand, openFileCommand, searchHighlightDecorationType);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(GrepWebviewViewProvider.viewType, provider)
+    );
+
+    // 検索コマンドの登録（ショートカット押下時にサイドバーをフォーカス）
+    const searchCommand = vscode.commands.registerCommand('c-grep-classifier.search', async () => {
+        await vscode.commands.executeCommand('cGrepClassifierView.focus');
+    });
+
+    context.subscriptions.push(searchCommand, searchHighlightDecorationType);
 }
 
 export function deactivate() {}

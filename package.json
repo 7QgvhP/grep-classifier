@@ -36,6 +36,7 @@
     "views": {
       "c-grep-classifier-sidebar": [
         {
+          "type": "webview",
           "id": "cGrepClassifierView",
           "name": "データフロー分類結果"
         }
