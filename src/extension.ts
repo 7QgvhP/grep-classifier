@@ -409,26 +409,74 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             display: block;
         }
         
-        .match-item {
-            padding: 6px 10px;
+        /* ファイルヘッダー */
+        .file-container {
+            margin-bottom: 2px;
+        }
+        .file-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 8px 4px 8px;
+            font-size: 0.9em;
             cursor: pointer;
-            border-bottom: 1px solid rgba(128, 128, 128, 0.08);
+            user-select: none;
+            color: var(--vscode-foreground);
+        }
+        .file-header:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .file-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .file-name {
+            font-weight: bold;
+            color: var(--vscode-textLink-foreground);
+        }
+        .file-count {
+            opacity: 0.6;
+            font-size: 0.85em;
+        }
+        .file-items {
+            display: none;
+            padding-left: 10px;
+            border-left: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
+            margin-left: 10px;
+        }
+        .file-items.expanded {
+            display: block;
+        }
+        
+        /* 一致項目 (コンパクト表示) */
+        .match-item {
+            display: flex;
+            align-items: center;
+            padding: 3px 6px;
+            cursor: pointer;
+            gap: 8px;
+            border-radius: 2px;
         }
         .match-item:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
-        .match-file {
-            font-weight: bold;
-            font-size: 0.9em;
-            color: var(--vscode-textLink-foreground);
-            margin-bottom: 2px;
+        .match-line-number {
+            color: var(--vscode-editorLineNumber-foreground, #858585);
+            min-width: 20px;
+            text-align: right;
+            font-family: var(--vscode-editor-font-family, monospace);
+            font-size: 0.85em;
+            user-select: none;
         }
         .match-code {
             font-family: var(--vscode-editor-font-family, monospace);
             font-size: 0.85em;
-            white-space: pre-wrap;
-            word-break: break-all;
-            opacity: 0.8;
+            white-space: pre;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0.9;
+            flex-grow: 1;
         }
         
         .info-text {
@@ -578,33 +626,71 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 const count = cat.list.length;
                 if (count === 0) continue;
 
-                const listId = 'cat-items-' + catIndex;
+                const catListId = 'cat-items-' + catIndex;
                 html += \`
                 <div class="category-container \${cat.class}">
-                    <div class="category-header" data-action="toggle" data-target="\${listId}">
+                    <div class="category-header" data-action="toggle" data-target="\${catListId}">
                         <div class="category-title">
                             <span>\${catName}</span>
                             <span class="category-count">\${count}</span>
                         </div>
                         <span class="arrow">▶</span>
                     </div>
-                    <div id="\${listId}" class="category-items">
+                    <div id="\${catListId}" class="category-items">
                 \`;
 
+                // ファイルごとにグループ化
+                const filesGroup = {};
                 cat.list.forEach(m => {
                     const uriStr = m.fileUriStr;
-                    // デコードしてパスからファイル名を取得
-                    const decodedUri = decodeURIComponent(uriStr);
-                    const fileName = decodedUri.substring(decodedUri.lastIndexOf('/') + 1);
-                    const codeSnippet = m.content.trim();
+                    if (!filesGroup[uriStr]) {
+                        const decodedUri = decodeURIComponent(uriStr);
+                        const fileName = decodedUri.substring(decodedUri.lastIndexOf('/') + 1);
+                        filesGroup[uriStr] = {
+                            fileName: fileName,
+                            matches: []
+                        };
+                    }
+                    filesGroup[uriStr].matches.push(m);
+                });
+
+                let fileIndex = 0;
+                for (const uriStr in filesGroup) {
+                    const fileGroup = filesGroup[uriStr];
+                    const fileCount = fileGroup.matches.length;
+                    const fileListId = \`\${catListId}-file-\${fileIndex}\`;
                     
                     html += \`
-                        <div class="match-item" data-action="open" data-uri="\${uriStr}" data-line="\${m.line}" data-start="\${m.charStart}" data-end="\${m.charEnd}">
-                            <div class="match-file">\${fileName}:\u0024{m.line + 1}</div>
-                            <div class="match-code">\${escapeHtml(codeSnippet)}</div>
+                        <div class="file-container">
+                            <div class="file-header" data-action="toggle" data-target="\${fileListId}">
+                                <div class="file-title">
+                                    <span class="arrow">▼</span>
+                                    <span class="file-name">\${fileGroup.fileName}</span>
+                                </div>
+                                <span class="file-count">\${fileCount}</span>
+                            </div>
+                            <div id="\${fileListId}" class="file-items expanded">
+                    \`;
+
+                    // 一致箇所を行番号順にソート
+                    fileGroup.matches.sort((a, b) => a.line - b.line);
+
+                    fileGroup.matches.forEach(m => {
+                        const codeSnippet = m.content.trim();
+                        html += \`
+                                <div class="match-item" data-action="open" data-uri="\${uriStr}" data-line="\${m.line}" data-start="\${m.charStart}" data-end="\${m.charEnd}">
+                                    <span class="match-line-number">\${m.line + 1}</span>
+                                    <span class="match-code">\${escapeHtml(codeSnippet)}</span>
+                                </div>
+                        \`;
+                    });
+
+                    html += \`
+                            </div>
                         </div>
                     \`;
-                });
+                    fileIndex++;
+                }
 
                 html += \`
                     </div>
