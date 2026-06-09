@@ -262,6 +262,20 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    // VS Codeのエンコーディング形式名から TextDecoder が認識できる名前に変換する
+    private _getNormalizedEncoding(vscodeEncoding: string): string {
+        const map: Record<string, string> = {
+            'utf8': 'utf-8',
+            'shiftjis': 'shift_jis',
+            'eucjp': 'euc-jp',
+            'utf16le': 'utf-16le',
+            'utf16be': 'utf-16be',
+            'iso2022jp': 'iso-2022-jp',
+            'cp1252': 'windows-1252'
+        };
+        return map[vscodeEncoding.toLowerCase()] || vscodeEncoding;
+    }
+
     // C言語ファイルへのGrep検索とデータフロー分類の実行
     private async _performSearch(query: string): Promise<GrepMatch[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -280,7 +294,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             const files = await vscode.workspace.findFiles('**/*.{c,h}', '**/node_modules/**');
             for (const file of files) {
                 try {
-                    const content = fs.readFileSync(file.fsPath, 'utf-8');
+                    // バイナリとして読み込む
+                    const buffer = fs.readFileSync(file.fsPath);
+                    // VS Codeの設定から文字コードを取得し正規化
+                    const vscodeEncoding = vscode.workspace.getConfiguration('files', file).get<string>('encoding') || 'utf8';
+                    const encoding = this._getNormalizedEncoding(vscodeEncoding);
+                    // 指定された文字コードでデコード
+                    const decoder = new TextDecoder(encoding);
+                    const content = decoder.decode(buffer);
+
                     // パフォーマンス最適化のため、まずは高速に簡易チェック
                     if (!content.includes(query)) {
                         continue;
@@ -342,20 +364,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         .search-input:focus {
             border-color: var(--vscode-focusBorder);
         }
-        .search-button {
-            margin-left: 6px;
-            padding: 4px 12px;
-            font-size: var(--vscode-font-size);
-            font-family: var(--vscode-font-family);
-            color: var(--vscode-button-foreground);
-            background-color: var(--vscode-button-background);
-            border: none;
-            border-radius: 2px;
-            cursor: pointer;
-        }
-        .search-button:hover {
-            background-color: var(--vscode-button-hoverBackground);
-        }
+
         
         /* カテゴリアコーディオン */
         .category-container {
@@ -439,8 +448,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <div class="search-container">
-        <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力..." />
-        <button id="search-button" class="search-button">検索</button>
+        <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力（Enterで検索）..." />
     </div>
     
     <div id="results-container">
@@ -450,7 +458,6 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         const searchInput = document.getElementById('search-input');
-        const searchButton = document.getElementById('search-button');
         const resultsContainer = document.getElementById('results-container');
 
         // 前回の状態を復元
@@ -470,7 +477,6 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        searchButton.addEventListener('click', triggerSearch);
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 triggerSearch();
@@ -490,6 +496,14 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             const items = document.getElementById(id);
             if (items) {
                 items.classList.toggle('expanded');
+                // 矢印の向きを切り替える
+                const header = items.previousElementSibling;
+                if (header) {
+                    const arrow = header.querySelector('.arrow');
+                    if (arrow) {
+                        arrow.textContent = items.classList.contains('expanded') ? '▼' : '▶';
+                    }
+                }
                 // 状態を維持するためにHTML全体をステートに記録
                 saveState();
             }
@@ -572,9 +586,9 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                             <span>\${catName}</span>
                             <span class="category-count">\${count}</span>
                         </div>
-                        <span class="arrow">▼</span>
+                        <span class="arrow">▶</span>
                     </div>
-                    <div id="\${listId}" class="category-items expanded">
+                    <div id="\${listId}" class="category-items">
                 \`;
 
                 cat.list.forEach(m => {
