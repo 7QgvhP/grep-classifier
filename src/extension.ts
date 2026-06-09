@@ -34,6 +34,8 @@ function findMatchesInTree(
     lines: string[]
 ): GrepMatch[] {
     const matches: GrepMatch[] = [];
+    // クエリに構造体や配列のアクセス演算子が含まれているか判定
+    const hasOperator = query.includes('.') || query.includes('->') || query.includes('[');
 
     function traverse(currentNode: Parser.SyntaxNode) {
         // コメントノード内のテキスト部分一致
@@ -48,6 +50,23 @@ function findMatchesInTree(
                     category: 'コメント'
                 });
                 return; // コメントの子ノードは探索不要
+            }
+        }
+
+        // 構造体メンバーアクセスや配列アクセスの判定 (クエリに記号が含まれる場合のみ)
+        if (hasOperator && (currentNode.type === 'field_expression' || currentNode.type === 'subscript_expression')) {
+            if (currentNode.text.includes(query)) {
+                const category = classifyIdentifier(currentNode, currentNode.text);
+                matches.push({
+                    fileUri,
+                    line: currentNode.startPosition.row,
+                    charStart: currentNode.startPosition.column,
+                    charEnd: currentNode.endPosition.column,
+                    content: lines[currentNode.startPosition.row],
+                    category
+                });
+                // 重複して子ノード（オブジェクト名やメンバー名単体）がヒットするのを防ぐため、巡回をスキップ
+                return;
             }
         }
 
