@@ -673,9 +673,16 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                     filesGroup[uriStr].matches.push(m);
                 });
 
+                // ファイル名でソートした配列を作成
+                const sortedFiles = Object.keys(filesGroup).map(uriStr => ({
+                    uriStr: uriStr,
+                    fileName: filesGroup[uriStr].fileName,
+                    matches: filesGroup[uriStr].matches
+                })).sort((a, b) => a.fileName.localeCompare(b.fileName));
+
                 let fileIndex = 0;
-                for (const uriStr in filesGroup) {
-                    const fileGroup = filesGroup[uriStr];
+                sortedFiles.forEach(fileGroup => {
+                    const uriStr = fileGroup.uriStr;
                     const fileCount = fileGroup.matches.length;
                     const fileListId = \`\${catListId}-file-\${fileIndex}\`;
                     
@@ -709,7 +716,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         </div>
                     \`;
                     fileIndex++;
-                }
+                });
 
                 html += \`
                     </div>
