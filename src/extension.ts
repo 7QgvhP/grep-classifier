@@ -109,6 +109,11 @@ function findMatchesInTree(
     return matches;
 }
 
+// ノードが対象ノード（親ノードなど）の物理的配下にあるかを判定する
+function isDescendantOf(node: Parser.SyntaxNode, target: Parser.SyntaxNode): boolean {
+    return target.startIndex <= node.startIndex && node.endIndex <= target.endIndex;
+}
+
 // 識別子ノードのコンテキスト（祖先ノードの関係性）からデータフロー分類を行う
 function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): DataFlowCategory {
     let current: Parser.SyntaxNode | null = node;
@@ -122,7 +127,7 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         // --- 1. 出力 (Output - 書き込み) の優先判定 ---
         if (parent.type === 'assignment_expression') {
             const left = parent.childForFieldName('left');
-            if (left && left.text.includes(identifierText)) {
+            if (left && isDescendantOf(node, left)) {
                 return '出力';
             }
         }
@@ -139,19 +144,19 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         // --- 2. 入力 (Input - 参照) の優先判定 ---
         if (parent.type === 'assignment_expression') {
             const right = parent.childForFieldName('right');
-            if (right && right.text.includes(identifierText)) {
+            if (right && isDescendantOf(node, right)) {
                 return '入力';
             }
         }
         if (parent.type === 'init_declarator') {
             const value = parent.childForFieldName('value');
-            if (value && value.text.includes(identifierText)) {
+            if (value && isDescendantOf(node, value)) {
                 return '入力';
             }
         }
         if (parent.type === 'if_statement' || parent.type === 'while_statement' || parent.type === 'for_statement') {
             const condition = parent.childForFieldName('condition');
-            if (condition && condition.text.includes(identifierText)) {
+            if (condition && isDescendantOf(node, condition)) {
                 return '入力';
             }
         }
@@ -172,13 +177,13 @@ function classifyIdentifier(node: Parser.SyntaxNode, identifierText: string): Da
         // --- 3. 定義 (Definition) の判定 ---
         if (parent.type === 'declaration' || parent.type === 'init_declarator' || parent.type === 'parameter_declaration') {
             const declarator = parent.childForFieldName('declarator');
-            if (declarator && declarator.text.includes(identifierText)) {
+            if (declarator && isDescendantOf(node, declarator)) {
                 return '定義';
             }
         }
         if (parent.type === 'function_definition') {
             const declarator = parent.childForFieldName('declarator');
-            if (declarator && declarator.text.includes(identifierText)) {
+            if (declarator && isDescendantOf(node, declarator)) {
                 return '定義';
             }
         }
