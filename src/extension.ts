@@ -175,11 +175,32 @@ function classifyIdentifier(node: Parser.SyntaxNode): DataFlowCategory {
         }
 
         // --- 3. 定義 (Definition) の判定 ---
-        if (parent.type === 'declaration' || parent.type === 'init_declarator' || parent.type === 'parameter_declaration') {
+        if (parent.type === 'type_definition') {
             const declarator = parent.childForFieldName('declarator');
             if (declarator && isDescendantOf(node, declarator)) {
                 return '定義';
             }
+        }
+        if (parent.type === 'enumerator') {
+            return '定義';
+        }
+        if (parent.type === 'preproc_params') {
+            return '定義';
+        }
+        if (parent.type === 'declaration' || parent.type === 'parameter_declaration') {
+            const typeNode = parent.childForFieldName('type');
+            if (!(typeNode && isDescendantOf(node, typeNode))) {
+                return '定義';
+            }
+        }
+        if (parent.type === 'init_declarator') {
+            const declarator = parent.childForFieldName('declarator');
+            if (declarator && isDescendantOf(node, declarator)) {
+                return '定義';
+            }
+        }
+        if (parent.type === 'ERROR' && parent.parent && parent.parent.type === 'declaration') {
+            return '定義';
         }
         if (parent.type === 'function_definition') {
             const declarator = parent.childForFieldName('declarator');

@@ -5,6 +5,8 @@
 
 // グローバル定義のテスト
 int global_hoge_val = 42;
+int hoge_max;
+int hoge;
 
 void update_hoge(HogeStruct* ptr) {
     // 構造体メンバへの代入（出力）のテスト
@@ -40,6 +42,8 @@ int main(void) {
     if (global_hoge_val > 50) {  // 条件式の中での参照
         printf("Hoge is high\n");
     }
+
+    hoge_max = hoge;
 
     int score = get_hoge_score(&hoge_data); // 関数の引数としての参照
 
