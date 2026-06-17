@@ -50,13 +50,42 @@ function findMatchesInTree(
         if (currentNode.type === 'comment') {
             const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
             if (isMatch) {
-                matches.push({
-                    fileUri,
-                    line: currentNode.startPosition.row,
-                    charStart: currentNode.startPosition.column,
-                    charEnd: currentNode.endPosition.column,
-                    content: lines[currentNode.startPosition.row],
-                    category: 'コメント'
+                const commentLines = currentNode.text.split(/\r?\n/);
+                const startRow = currentNode.startPosition.row;
+                
+                commentLines.forEach((commentLine, offset) => {
+                    const isLineMatch = matchWholeWord ? wholeWordRegex.test(commentLine) : commentLine.includes(query);
+                    if (isLineMatch) {
+                        const actualLine = startRow + offset;
+                        const lineContent = lines[actualLine];
+                        
+                        let charStart = 0;
+                        let charEnd = 0;
+                        if (lineContent) {
+                            if (matchWholeWord) {
+                                const match = lineContent.match(wholeWordRegex);
+                                if (match && match.index !== undefined) {
+                                    charStart = match.index;
+                                    charEnd = charStart + match[0].length;
+                                }
+                            } else {
+                                const idx = lineContent.indexOf(query);
+                                if (idx !== -1) {
+                                    charStart = idx;
+                                    charEnd = idx + query.length;
+                                }
+                            }
+                        }
+                        
+                        matches.push({
+                            fileUri,
+                            line: actualLine,
+                            charStart,
+                            charEnd,
+                            content: lineContent || commentLine,
+                            category: 'コメント'
+                        });
+                    }
                 });
                 return; // コメントの子ノードは探索不要
             }
