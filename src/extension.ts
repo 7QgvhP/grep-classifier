@@ -70,8 +70,12 @@ function findMatchesInTree(
             }
         }
 
-        // 識別子または構造体メンバー名ノードの部分一致
-        if (currentNode.type === 'identifier' || currentNode.type === 'field_identifier') {
+        // 識別子、構造体メンバー名、またはマクロ引数値ノードの部分一致
+        if (
+            currentNode.type === 'identifier' ||
+            currentNode.type === 'field_identifier' ||
+            currentNode.type === 'preproc_arg'
+        ) {
             if (currentNode.text.includes(query)) {
                 const category = classifyIdentifier(currentNode);
                 matches.push({
