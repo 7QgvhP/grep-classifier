@@ -31,16 +31,25 @@ function findMatchesInTree(
     node: Parser.SyntaxNode,
     query: string,
     fileUri: vscode.Uri,
-    lines: string[]
+    lines: string[],
+    matchWholeWord: boolean
 ): GrepMatch[] {
     const matches: GrepMatch[] = [];
     // クエリに構造体や配列のアクセス演算子が含まれているか判定
     const hasOperator = query.includes('.') || query.includes('->') || query.includes('[');
 
+    function escapeRegExp(str: string): string {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    const escapedQuery = escapeRegExp(query);
+    const wholeWordRegex = new RegExp(`\\b${escapedQuery}\\b`);
+
     function traverse(currentNode: Parser.SyntaxNode) {
-        // コメントノード内のテキスト部分一致
+        // コメントノード内のテキスト部分一致 / 単語全体一致
         if (currentNode.type === 'comment') {
-            if (currentNode.text.includes(query)) {
+            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
+            if (isMatch) {
                 matches.push({
                     fileUri,
                     line: currentNode.startPosition.row,
@@ -55,7 +64,8 @@ function findMatchesInTree(
 
         // 構造体メンバーアクセスや配列アクセスの判定 (クエリに記号が含まれる場合のみ)
         if (hasOperator && (currentNode.type === 'field_expression' || currentNode.type === 'subscript_expression')) {
-            if (currentNode.text.includes(query)) {
+            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
+            if (isMatch) {
                 const category = classifyIdentifier(currentNode);
                 matches.push({
                     fileUri,
@@ -70,13 +80,14 @@ function findMatchesInTree(
             }
         }
 
-        // 識別子、構造体メンバー名、またはマクロ引数値ノードの部分一致
+        // 識別子、構造体メンバー名、またはマクロ引数値ノードの部分一致 / 完全一致
         if (
             currentNode.type === 'identifier' ||
             currentNode.type === 'field_identifier' ||
             currentNode.type === 'preproc_arg'
         ) {
-            if (currentNode.text.includes(query)) {
+            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
+            if (isMatch) {
                 const category = classifyIdentifier(currentNode);
                 matches.push({
                     fileUri,
@@ -89,9 +100,10 @@ function findMatchesInTree(
             }
         }
 
-        // 文字列リテラル内のテキスト部分一致 (入力として扱う)
+        // 文字列リテラル内のテキスト部分一致 / 単語全体一致 (入力として扱う)
         if (currentNode.type === 'string_literal') {
-            if (currentNode.text.includes(query)) {
+            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
+            if (isMatch) {
                 matches.push({
                     fileUri,
                     line: currentNode.startPosition.row,
@@ -266,10 +278,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             switch (data.type) {
                 case 'search': {
                     const query = data.query;
+                    const matchWholeWord = !!data.matchWholeWord;
                     if (!query) {
                         return;
                     }
-                    const rawMatches = await this._performSearch(query);
+                    const rawMatches = await this._performSearch(query, matchWholeWord);
                     // Webviewに渡すシリアライズ形式への変換
                     const matches: GrepMatchSerializable[] = rawMatches.map(m => ({
                         fileUriStr: m.fileUri.toString(),
@@ -279,7 +292,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         content: m.content,
                         category: m.category
                     }));
-                    webviewView.webview.postMessage({ type: 'results', matches, query });
+                    webviewView.webview.postMessage({ type: 'results', matches, query, matchWholeWord });
                     break;
                 }
                 case 'openFile': {
@@ -326,7 +339,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     }
 
     // C言語ファイルへのGrep検索とデータフロー分類の実行
-    private async _performSearch(query: string): Promise<GrepMatch[]> {
+    private async _performSearch(query: string, matchWholeWord: boolean): Promise<GrepMatch[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
             vscode.window.showInformationMessage('ワークスペースが開かれていません。');
@@ -352,13 +365,13 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                     const decoder = new TextDecoder(encoding);
                     const content = decoder.decode(buffer);
 
-                    // パフォーマンス最適化のため、まずは高速に簡易チェック
+                    // パフォーマンス最適化のため、まずは高速に簡易チェック（部分一致しなければ完全一致もしない）
                     if (!content.includes(query)) {
                         continue;
                     }
                     const tree = this._parser.parse(content);
                     const lines = content.split(/\r?\n/);
-                    const fileMatches = findMatchesInTree(tree.rootNode, query, file, lines);
+                    const fileMatches = findMatchesInTree(tree.rootNode, query, file, lines, matchWholeWord);
                     allMatches.push(...fileMatches);
                 } catch (err) {
                     console.error(`ファイルの解析に失敗しました: ${file.fsPath}`, err);
@@ -399,9 +412,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             padding-bottom: 6px;
             border-bottom: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.2));
         }
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            flex-grow: 1;
+            align-items: center;
+        }
         .search-input {
             flex-grow: 1;
-            padding: 4px 6px;
+            padding: 4px 28px 4px 6px;
             font-size: var(--vscode-font-size);
             font-family: var(--vscode-font-family);
             color: var(--vscode-input-foreground);
@@ -413,7 +432,33 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         .search-input:focus {
             border-color: var(--vscode-focusBorder);
         }
-
+        .toggle-button {
+            position: absolute;
+            right: 4px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--vscode-input-foreground);
+            opacity: 0.6;
+            cursor: pointer;
+            border-radius: 2px;
+            padding: 0;
+            outline: none;
+        }
+        .toggle-button:hover {
+            opacity: 0.8;
+            background-color: rgba(128, 128, 128, 0.1);
+        }
+        .toggle-button.active {
+            opacity: 1;
+            background-color: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.2));
+            border-color: var(--vscode-inputOption-activeBorder, #007acc);
+            color: var(--vscode-inputOption-activeForeground, var(--vscode-input-foreground));
+        }
         
         /* カテゴリアコーディオン */
         .category-container {
@@ -545,7 +590,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <div class="search-container">
-        <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力（Enterで検索）..." />
+        <div class="input-wrapper">
+            <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力（Enterで検索）..." />
+            <button id="whole-word-toggle" class="toggle-button" title="単語全体に一致 (Match Whole Word)">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                    <text x="3" y="11" font-family="monospace" font-size="8" font-weight="bold" fill="currentColor">ab</text>
+                </svg>
+            </button>
+        </div>
     </div>
     
     <div id="results-container">
@@ -555,12 +608,20 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         const searchInput = document.getElementById('search-input');
+        const wholeWordToggle = document.getElementById('whole-word-toggle');
         const resultsContainer = document.getElementById('results-container');
+        let matchWholeWord = false;
 
         // 前回の状態を復元
         const previousState = vscode.getState();
-        if (previousState && previousState.query) {
-            searchInput.value = previousState.query;
+        if (previousState) {
+            if (previousState.query) {
+                searchInput.value = previousState.query;
+            }
+            if (previousState.matchWholeWord) {
+                matchWholeWord = previousState.matchWholeWord;
+                wholeWordToggle.classList.toggle('active', matchWholeWord);
+            }
             if (previousState.html) {
                 resultsContainer.innerHTML = previousState.html;
             }
@@ -570,7 +631,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             const query = searchInput.value.trim();
             if (query) {
                 resultsContainer.innerHTML = '<div class="info-text">分析中...</div>';
-                vscode.postMessage({ type: 'search', query: query });
+                vscode.postMessage({ 
+                    type: 'search', 
+                    query: query,
+                    matchWholeWord: matchWholeWord
+                });
             }
         }
 
@@ -578,6 +643,13 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             if (e.key === 'Enter') {
                 triggerSearch();
             }
+        });
+
+        wholeWordToggle.addEventListener('click', () => {
+            matchWholeWord = !matchWholeWord;
+            wholeWordToggle.classList.toggle('active', matchWholeWord);
+            saveState();
+            triggerSearch();
         });
 
         // 拡張機能本体からのデータ受取
@@ -641,6 +713,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         function saveState() {
             vscode.setState({
                 query: searchInput.value.trim(),
+                matchWholeWord: matchWholeWord,
                 html: resultsContainer.innerHTML
             });
         }
