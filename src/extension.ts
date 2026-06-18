@@ -115,7 +115,9 @@ function findMatchesInTree(
             currentNode.type === 'field_identifier' ||
             currentNode.type === 'preproc_arg'
         ) {
-            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
+            const isMatch = matchWholeWord
+                ? (currentNode.type === 'preproc_arg' ? wholeWordRegex.test(currentNode.text) : currentNode.text === query)
+                : currentNode.text.includes(query);
             if (isMatch) {
                 const category = classifyIdentifier(currentNode);
                 matches.push({
