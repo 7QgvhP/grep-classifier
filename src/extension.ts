@@ -281,6 +281,8 @@ function classifyIdentifier(node: Parser.SyntaxNode): DataFlowCategory {
 class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'cGrepClassifierView';
     private _view?: vscode.WebviewView;
+    private _isReady = false;
+    private _pendingQuery?: string;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -288,12 +290,31 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         private readonly _searchHighlightDecorationType: vscode.TextEditorDecorationType
     ) {}
 
+    // 選択テキストによる検索をトリガーするメソッド
+    public searchForSelection(query: string) {
+        if (this._view) {
+            this._view.show(true);
+            if (this._isReady) {
+                // Webviewの準備ができている場合はクエリを送信して検索実行
+                this._view.webview.postMessage({ type: 'setQueryAndSearch', query });
+            } else {
+                // 準備ができていない場合はペンディングとして保持
+                this._pendingQuery = query;
+            }
+        } else {
+            // ビューがまだ作成されていない場合はペンディングとして保持し、フォーカスを要求
+            this._pendingQuery = query;
+            vscode.commands.executeCommand('cGrepClassifierView.focus');
+        }
+    }
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ) {
         this._view = webviewView;
+        this._isReady = false; // 初期化
 
         // Webviewのオプション設定（JSの有効化とルートパスの制限）
         webviewView.webview.options = {
@@ -307,6 +328,16 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         // Webview側からのメッセージ受信時のイベントリスナー
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
+                case 'ready': {
+                    this._isReady = true;
+                    if (this._pendingQuery) {
+                        const query = this._pendingQuery;
+                        this._pendingQuery = undefined;
+                        // ペンディングされていたクエリを送信して検索実行
+                        webviewView.webview.postMessage({ type: 'setQueryAndSearch', query });
+                    }
+                    break;
+                }
                 case 'search': {
                     const query = data.query;
                     const matchWholeWord = !!data.matchWholeWord;
@@ -688,6 +719,9 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             const message = event.data;
             if (message.type === 'results') {
                 renderResults(message.matches, message.query);
+            } else if (message.type === 'setQueryAndSearch') {
+                searchInput.value = message.query;
+                triggerSearch();
             }
         });
 
@@ -872,6 +906,9 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
         }
+
+        // 初期化完了を拡張機能本体に通知
+        vscode.postMessage({ type: 'ready' });
     </script>
 </body>
 </html>`;
@@ -924,9 +961,22 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider(GrepWebviewViewProvider.viewType, provider)
     );
 
-    // 検索コマンドの登録（ショートカット押下時にサイドバーをフォーカス）
+    // 検索コマンドの登録（選択テキストがあれば検索、なければサイドバーをフォーカス）
     const searchCommand = vscode.commands.registerCommand('c-grep-classifier.search', async () => {
-        await vscode.commands.executeCommand('cGrepClassifierView.focus');
+        const editor = vscode.window.activeTextEditor;
+        let selectedText = '';
+        if (editor) {
+            const selection = editor.selection;
+            if (!selection.isEmpty) {
+                selectedText = editor.document.getText(selection).trim();
+            }
+        }
+
+        if (selectedText) {
+            provider.searchForSelection(selectedText);
+        } else {
+            await vscode.commands.executeCommand('cGrepClassifierView.focus');
+        }
     });
 
     context.subscriptions.push(searchCommand, searchHighlightDecorationType);

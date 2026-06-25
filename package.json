@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "1.9.2",
+  "version": "1.10.0",
 
 
 
