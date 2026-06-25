@@ -746,7 +746,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 selectMatchItem(activeMatchIndex + 1, true);
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                selectMatchItem(activeMatchIndex - 1, true);
+                if (activeMatchIndex === 0) {
+                    // 最初の項目でArrowUpを押した場合は入力欄にフォーカスを戻し選択を解除
+                    activeMatchIndex = -1;
+                    visibleItems.forEach(item => item.classList.remove('selected'));
+                    searchInput.focus();
+                    searchInput.select();
+                } else {
+                    selectMatchItem(activeMatchIndex - 1, true);
+                }
             } else if (e.key === 'Enter') {
                 if (activeMatchIndex >= 0 && activeMatchIndex < visibleItems.length) {
                     e.preventDefault();
@@ -791,6 +799,13 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 triggerSearch();
+            } else if (e.key === 'ArrowDown') {
+                const visibleItems = getVisibleMatchItems();
+                if (visibleItems.length > 0) {
+                    e.preventDefault();
+                    searchInput.blur(); // 入力欄からフォーカスを外す
+                    selectMatchItem(0, true); // 最初の項目を選択
+                }
             }
         });
 
@@ -809,6 +824,9 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             } else if (message.type === 'setQueryAndSearch') {
                 searchInput.value = message.query;
                 triggerSearch();
+                // 検索実行後に入力欄にフォーカスを設定し、すぐにキーボード操作を行えるようにする
+                searchInput.focus();
+                searchInput.select();
             }
         });
 
@@ -886,7 +904,8 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                     });
                 }
                 
-                openFile(uriStr, line, charStart, charEnd, false);
+                // クリック時もフォーカスはWebview（サイドバー）に残し、そのまま上下キーで操作できるようにする
+                openFile(uriStr, line, charStart, charEnd, true);
                 saveState();
             }
         });
@@ -1024,6 +1043,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
         }
+
+        // 初期ロード完了時に検索窓をフォーカス
+        window.addEventListener('load', () => {
+            searchInput.focus();
+        });
 
         // 初期化完了を拡張機能本体に通知
         vscode.postMessage({ type: 'ready' });
