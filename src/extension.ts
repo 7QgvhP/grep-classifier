@@ -358,11 +358,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'openFile': {
-                    const { fileUriStr, line, charStart, charEnd } = data;
+                    const { fileUriStr, line, charStart, charEnd, preserveFocus } = data;
                     try {
                         const uri = vscode.Uri.parse(fileUriStr);
                         const doc = await vscode.workspace.openTextDocument(uri);
-                        const editor = await vscode.window.showTextDocument(doc);
+                        const editor = await vscode.window.showTextDocument(doc, { preserveFocus: !!preserveFocus });
                         
                         const startPos = new vscode.Position(line, charStart);
                         const endPos = new vscode.Position(line, charEnd);
@@ -625,6 +625,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         .match-item:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
+        .match-item.selected {
+            background-color: var(--vscode-list-focusBackground);
+            color: var(--vscode-list-focusForeground);
+            outline: 1px solid var(--vscode-list-focusOutline, transparent);
+        }
         .match-line-number {
             color: var(--vscode-editorLineNumber-foreground, #858585);
             min-width: 20px;
@@ -684,6 +689,71 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         const wholeWordToggle = document.getElementById('whole-word-toggle');
         const resultsContainer = document.getElementById('results-container');
         let matchWholeWord = false;
+        let activeMatchIndex = -1;
+
+        // 現在表示されている（アコーディオンが開いている）すべての.match-itemを取得
+        function getVisibleMatchItems() {
+            return Array.from(resultsContainer.querySelectorAll('.category-items.expanded .file-items.expanded .match-item'));
+        }
+
+        // 指定インデックスのアイテムをアクティブ表示にしてエディタで開く
+        function selectMatchItem(index, preserveFocus = true) {
+            const visibleItems = getVisibleMatchItems();
+            if (visibleItems.length === 0) return;
+
+            if (index < 0) index = 0;
+            if (index >= visibleItems.length) index = visibleItems.length - 1;
+
+            activeMatchIndex = index;
+
+            visibleItems.forEach((item, idx) => {
+                if (idx === index) {
+                    item.classList.add('selected');
+                    item.scrollIntoView({ block: 'nearest' });
+                    
+                    const fileUriStr = item.getAttribute('data-uri');
+                    const line = parseInt(item.getAttribute('data-line'), 10);
+                    const charStart = parseInt(item.getAttribute('data-start'), 10);
+                    const charEnd = parseInt(item.getAttribute('data-end'), 10);
+                    
+                    vscode.postMessage({
+                        type: 'openFile',
+                        fileUriStr,
+                        line,
+                        charStart,
+                        charEnd,
+                        preserveFocus
+                    });
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+
+            saveState();
+        }
+
+        // キーボード操作のハンドリング（上下キー、Enterキー）
+        window.addEventListener('keydown', (e) => {
+            if (e.target === searchInput) {
+                return;
+            }
+
+            const visibleItems = getVisibleMatchItems();
+            if (visibleItems.length === 0) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectMatchItem(activeMatchIndex + 1, true);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectMatchItem(activeMatchIndex - 1, true);
+            } else if (e.key === 'Enter') {
+                if (activeMatchIndex >= 0 && activeMatchIndex < visibleItems.length) {
+                    e.preventDefault();
+                    selectMatchItem(activeMatchIndex, false);
+                }
+            }
+        });
 
         // 前回の状態を復元
         const previousState = vscode.getState();
@@ -697,6 +767,12 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             }
             if (previousState.html) {
                 resultsContainer.innerHTML = previousState.html;
+                
+                const visibleItems = getVisibleMatchItems();
+                const currentSelected = resultsContainer.querySelector('.match-item.selected');
+                if (currentSelected) {
+                    activeMatchIndex = visibleItems.indexOf(currentSelected);
+                }
             }
         }
 
@@ -749,19 +825,34 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         arrow.textContent = items.classList.contains('expanded') ? '▼' : '▶';
                     }
                 }
+
+                // 状態変化に伴いアクティブ項目のインデックスを再同期
+                const visibleItems = getVisibleMatchItems();
+                const currentSelected = resultsContainer.querySelector('.match-item.selected');
+                if (currentSelected) {
+                    const idx = visibleItems.indexOf(currentSelected);
+                    if (idx !== -1) {
+                        activeMatchIndex = idx;
+                    } else {
+                        currentSelected.classList.remove('selected');
+                        activeMatchIndex = -1;
+                    }
+                }
+
                 // 状態を維持するためにHTML全体をステートに記録
                 saveState();
             }
         }
 
         // 一致箇所クリック時の処理
-        function openFile(fileUriStr, line, charStart, charEnd) {
+        function openFile(fileUriStr, line, charStart, charEnd, preserveFocus = false) {
             vscode.postMessage({
                 type: 'openFile',
                 fileUriStr: fileUriStr,
                 line: line,
                 charStart: charStart,
-                charEnd: charEnd
+                charEnd: charEnd,
+                preserveFocus: preserveFocus
             });
         }
 
@@ -781,7 +872,22 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 const line = parseInt(target.getAttribute('data-line'), 10);
                 const charStart = parseInt(target.getAttribute('data-start'), 10);
                 const charEnd = parseInt(target.getAttribute('data-end'), 10);
-                openFile(uriStr, line, charStart, charEnd);
+                
+                const visibleItems = getVisibleMatchItems();
+                const idx = visibleItems.indexOf(target);
+                if (idx !== -1) {
+                    activeMatchIndex = idx;
+                    visibleItems.forEach((item, i) => {
+                        if (i === idx) {
+                            item.classList.add('selected');
+                        } else {
+                            item.classList.remove('selected');
+                        }
+                    });
+                }
+                
+                openFile(uriStr, line, charStart, charEnd, false);
+                saveState();
             }
         });
 
@@ -796,6 +902,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
 
         // 検索結果のHTML生成と描画
         function renderResults(matches, query) {
+            activeMatchIndex = -1; // インデックスをリセット
             if (!matches || matches.length === 0) {
                 resultsContainer.innerHTML = '<div class="info-text">一致する箇所が見つかりませんでした。</div>';
                 saveState();
