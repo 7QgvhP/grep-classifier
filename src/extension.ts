@@ -59,32 +59,44 @@ function findMatchesInTree(
                         const actualLine = startRow + offset;
                         const lineContent = lines[actualLine];
                         
-                        let charStart = 0;
-                        let charEnd = 0;
                         if (lineContent) {
                             if (matchWholeWord) {
-                                const match = lineContent.match(wholeWordRegex);
-                                if (match && match.index !== undefined) {
-                                    charStart = match.index;
-                                    charEnd = charStart + match[0].length;
+                                const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
+                                let match;
+                                while ((match = globalRegex.exec(lineContent)) !== null) {
+                                    matches.push({
+                                        fileUri,
+                                        line: actualLine,
+                                        charStart: match.index,
+                                        charEnd: match.index + match[0].length,
+                                        content: lineContent,
+                                        category: 'コメント'
+                                    });
                                 }
                             } else {
-                                const idx = lineContent.indexOf(query);
-                                if (idx !== -1) {
-                                    charStart = idx;
-                                    charEnd = idx + query.length;
+                                let idx = lineContent.indexOf(query);
+                                while (idx !== -1) {
+                                    matches.push({
+                                        fileUri,
+                                        line: actualLine,
+                                        charStart: idx,
+                                        charEnd: idx + query.length,
+                                        content: lineContent,
+                                        category: 'コメント'
+                                    });
+                                    idx = lineContent.indexOf(query, idx + query.length);
                                 }
                             }
+                        } else {
+                            matches.push({
+                                fileUri,
+                                line: actualLine,
+                                charStart: 0,
+                                charEnd: commentLine.length,
+                                content: commentLine,
+                                category: 'コメント'
+                            });
                         }
-                        
-                        matches.push({
-                            fileUri,
-                            line: actualLine,
-                            charStart,
-                            charEnd,
-                            content: lineContent || commentLine,
-                            category: 'コメント'
-                        });
                     }
                 });
                 return; // コメントの子ノードは探索不要
@@ -109,15 +121,12 @@ function findMatchesInTree(
             }
         }
 
-        // 識別子、構造体メンバー名、またはマクロ引数値ノードの部分一致 / 完全一致
+        // 識別子、構造体メンバー名の部分一致 / 完全一致
         if (
             currentNode.type === 'identifier' ||
-            currentNode.type === 'field_identifier' ||
-            currentNode.type === 'preproc_arg'
+            currentNode.type === 'field_identifier'
         ) {
-            const isMatch = matchWholeWord
-                ? (currentNode.type === 'preproc_arg' ? wholeWordRegex.test(currentNode.text) : currentNode.text === query)
-                : currentNode.text.includes(query);
+            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
             if (isMatch) {
                 const category = classifyIdentifier(currentNode);
                 matches.push({
@@ -131,18 +140,78 @@ function findMatchesInTree(
             }
         }
 
-        // 文字列リテラル内のテキスト部分一致 / 単語全体一致 (入力として扱う)
+        // マクロ引数値ノードの部分一致 / 完全一致（複数マッチに対応）
+        if (currentNode.type === 'preproc_arg') {
+            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
+            if (isMatch) {
+                const lineContent = lines[currentNode.startPosition.row];
+                if (lineContent) {
+                    const category = classifyIdentifier(currentNode);
+                    if (matchWholeWord) {
+                        const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
+                        let match;
+                        while ((match = globalRegex.exec(lineContent)) !== null) {
+                            matches.push({
+                                fileUri,
+                                line: currentNode.startPosition.row,
+                                charStart: match.index,
+                                charEnd: match.index + match[0].length,
+                                content: lineContent,
+                                category
+                            });
+                        }
+                    } else {
+                        let idx = lineContent.indexOf(query);
+                        while (idx !== -1) {
+                            matches.push({
+                                fileUri,
+                                line: currentNode.startPosition.row,
+                                charStart: idx,
+                                charEnd: idx + query.length,
+                                content: lineContent,
+                                category
+                            });
+                            idx = lineContent.indexOf(query, idx + query.length);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 文字列リテラル内のテキスト部分一致 / 単語全体一致 (入力として扱う、複数マッチに対応)
         if (currentNode.type === 'string_literal') {
             const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
             if (isMatch) {
-                matches.push({
-                    fileUri,
-                    line: currentNode.startPosition.row,
-                    charStart: currentNode.startPosition.column,
-                    charEnd: currentNode.endPosition.column,
-                    content: lines[currentNode.startPosition.row],
-                    category: '入力'
-                });
+                const lineContent = lines[currentNode.startPosition.row];
+                if (lineContent) {
+                    if (matchWholeWord) {
+                        const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
+                        let match;
+                        while ((match = globalRegex.exec(lineContent)) !== null) {
+                            matches.push({
+                                fileUri,
+                                line: currentNode.startPosition.row,
+                                charStart: match.index,
+                                charEnd: match.index + match[0].length,
+                                content: lineContent,
+                                category: '入力'
+                            });
+                        }
+                    } else {
+                        let idx = lineContent.indexOf(query);
+                        while (idx !== -1) {
+                            matches.push({
+                                fileUri,
+                                line: currentNode.startPosition.row,
+                                charStart: idx,
+                                charEnd: idx + query.length,
+                                content: lineContent,
+                                category: '入力'
+                            });
+                            idx = lineContent.indexOf(query, idx + query.length);
+                        }
+                    }
+                }
             }
         }
 
@@ -958,9 +1027,9 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                             <span>\${catName}</span>
                             <span class="category-count">\${count}</span>
                         </div>
-                        <span class="arrow">▶</span>
+                        <span class="arrow">▼</span>
                     </div>
-                    <div id="\${catListId}" class="category-items">
+                    <div id="\${catListId}" class="category-items expanded">
                 \`;
 
                 // ファイルごとにグループ化
