@@ -630,7 +630,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             color: var(--vscode-badge-foreground);
             padding: 1px 5px;
             border-radius: 10px;
-            font-size: 0.85em;
+            font-size: 11px;
         }
         
         .category-items {
@@ -651,7 +651,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             justify-content: space-between;
             align-items: center;
             padding: 4px 8px 4px 8px;
-            font-size: 0.9em;
+            font-size: 12px;
             cursor: pointer;
             user-select: none;
             color: var(--vscode-foreground);
@@ -670,7 +670,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         }
         .file-count {
             opacity: 0.6;
-            font-size: 0.85em;
+            font-size: 11px;
         }
         .file-items {
             display: none;
@@ -704,12 +704,12 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             min-width: 20px;
             text-align: right;
             font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 0.85em;
+            font-size: 11px;
             user-select: none;
         }
         .match-code {
             font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 0.85em;
+            font-size: 11px;
             white-space: pre;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -721,7 +721,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             text-align: center;
             opacity: 0.6;
             margin-top: 20px;
-            font-size: 0.95em;
+            font-size: 12px;
         }
         
         /* カテゴリ毎の左線ボーダーワンポイント */
