@@ -194,11 +194,17 @@
 
         // 一致箇所を行番号順にソート
         const sorted = fileGroup.matches.slice().sort((a, b) => a.line - b.line);
-        const itemsHtml = sorted.map(m => `
+        const itemsHtml = sorted.map(m => {
+            // 所属関数が判明している場合のみ関数名を表示する（グローバル定義やマクロでは非表示）
+            const functionLabel = m.functionName
+                ? `<span class="match-function" title="所属関数: ${escapeHtml(m.functionName)}">${escapeHtml(m.functionName)}()</span>`
+                : '';
+            return `
                                 <div class="match-item" data-action="open" data-uri="${fileGroup.uriStr}" data-line="${m.line}" data-start="${m.charStart}" data-end="${m.charEnd}">
-                                    <span class="match-line-number">${m.line + 1}</span>
+                                    <span class="match-line-number">${m.line + 1}</span>${functionLabel}
                                     <span class="match-code">${escapeHtml(m.content.trim())}</span>
-                                </div>`).join('');
+                                </div>`;
+        }).join('');
 
         return `
                         <div class="file-container">

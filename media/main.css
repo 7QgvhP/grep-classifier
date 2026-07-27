@@ -181,6 +181,19 @@ body {
     font-size: 11px;
     user-select: none;
 }
+/* 一致箇所が属する関数名 */
+.match-function {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    color: var(--vscode-symbolIcon-functionForeground, var(--vscode-textLink-foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 45%;
+    flex-shrink: 1;
+    opacity: 0.85;
+    user-select: none;
+}
 .match-code {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px;
@@ -189,6 +202,7 @@ body {
     text-overflow: ellipsis;
     opacity: 0.9;
     flex-grow: 1;
+    min-width: 0;
 }
 
 .info-text {

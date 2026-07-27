@@ -76,9 +76,13 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         return;
                     }
                     const rawMatches = await this._performSearch(query, matchWholeWord);
+                    // 所属関数の表示が無効な場合は関数名を送信しない
+                    const showFunction = vscode.workspace.getConfiguration('cGrepClassifier')
+                        .get<boolean>('showEnclosingFunction') ?? true;
                     // Webviewに渡すシリアライズ形式への変換
-                    const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, ...rest }) => ({
+                    const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, functionName, ...rest }) => ({
                         ...rest,
+                        functionName: showFunction ? functionName : undefined,
                         fileUriStr: fileUri.toString()
                     }));
                     webviewView.webview.postMessage({ type: 'results', matches });

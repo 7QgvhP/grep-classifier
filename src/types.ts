@@ -23,6 +23,7 @@ export interface GrepMatch {
     charEnd: number;
     content: string; // 該当行のテキスト
     category: DataFlowCategory;
+    functionName?: string; // 一致箇所が属する関数名（関数外の場合は未設定）
 }
 
 // Webviewに受け渡すためのシリアライズ可能な一致情報（fileUri のみ文字列に置換）
