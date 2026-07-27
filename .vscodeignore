@@ -1,0 +1,17 @@
+# 開発用の設定・ソース類（配布物には不要）
+.vscode/**
+.claude/**
+.vscode-test/**
+src/**
+docs/**
+test_data/**
+.gitignore
+tsconfig.json
+**/*.ts
+**/*.map
+
+# 拡張機能本体は bin/ の WASM を読み込むため、out/ 配下の複製は不要
+out/*.wasm
+
+# パッケージ化の成果物自体
+*.vsix

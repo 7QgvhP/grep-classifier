@@ -1,0 +1,206 @@
+body {
+    padding: 8px 10px;
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    background-color: var(--vscode-sideBar-background);
+}
+
+/* 検索コンテナの配置 */
+.search-container {
+    display: flex;
+    margin-bottom: 12px;
+    position: sticky;
+    top: 0;
+    background-color: var(--vscode-sideBar-background);
+    z-index: 10;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.2));
+}
+.search-input-control {
+    display: flex;
+    align-items: center;
+    flex-grow: 1;
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+    padding: 2px 2px 2px 6px;
+    position: relative;
+}
+.search-input-control:focus-within {
+    border-color: var(--vscode-focusBorder);
+    outline: 1px solid var(--vscode-focusBorder);
+}
+.search-input {
+    flex-grow: 1;
+    border: none;
+    background: transparent;
+    color: var(--vscode-input-foreground);
+    font-size: var(--vscode-font-size);
+    font-family: var(--vscode-font-family);
+    outline: none;
+    padding: 2px 0;
+    width: 100%;
+}
+.search-options {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 4px;
+}
+.toggle-button {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--vscode-input-foreground);
+    opacity: 0.8;
+    cursor: pointer;
+    border-radius: 2px;
+    padding: 0;
+    outline: none;
+}
+.toggle-button:hover {
+    background-color: var(--vscode-inputOption-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+.toggle-button.active {
+    background-color: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.2));
+    border-color: var(--vscode-inputOption-activeBorder, #007acc);
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-input-foreground));
+    opacity: 1;
+}
+
+/* カテゴリアコーディオン */
+.category-container {
+    margin-bottom: 6px;
+    border-radius: 2px;
+    overflow: hidden;
+    border: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
+}
+.category-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    font-weight: bold;
+    cursor: pointer;
+    user-select: none;
+    background-color: var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.1));
+    color: var(--vscode-sideBarSectionHeader-foreground);
+}
+.category-header:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+.category-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.category-count {
+    background-color: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    padding: 1px 5px;
+    border-radius: 10px;
+    font-size: 11px;
+}
+
+.category-items {
+    display: none;
+    padding: 2px 0;
+    background-color: rgba(128, 128, 128, 0.02);
+}
+.category-items.expanded {
+    display: block;
+}
+
+/* ファイルヘッダー */
+.file-container {
+    margin-bottom: 2px;
+}
+.file-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--vscode-foreground);
+}
+.file-header:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+.file-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.file-name {
+    font-weight: bold;
+    color: var(--vscode-textLink-foreground);
+}
+.file-count {
+    opacity: 0.6;
+    font-size: 11px;
+}
+.file-items {
+    display: none;
+    padding-left: 10px;
+    border-left: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
+    margin-left: 10px;
+}
+.file-items.expanded {
+    display: block;
+}
+
+/* 一致項目 (コンパクト表示) */
+.match-item {
+    display: flex;
+    align-items: center;
+    padding: 3px 6px;
+    cursor: pointer;
+    gap: 8px;
+    border-radius: 2px;
+}
+.match-item:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+.match-item.selected {
+    background-color: var(--vscode-list-focusBackground);
+    color: var(--vscode-list-focusForeground);
+    outline: 1px solid var(--vscode-list-focusOutline, transparent);
+}
+.match-line-number {
+    color: var(--vscode-editorLineNumber-foreground, #858585);
+    min-width: 20px;
+    text-align: right;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    user-select: none;
+}
+.match-code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.9;
+    flex-grow: 1;
+}
+
+.info-text {
+    text-align: center;
+    opacity: 0.6;
+    margin-top: 20px;
+    font-size: 12px;
+}
+
+/* カテゴリ毎の左線ボーダーワンポイント */
+.cat-input { border-left: 3px solid var(--vscode-charts-blue, #3794ff); }
+.cat-output { border-left: 3px solid var(--vscode-charts-red, #e06c75); }
+.cat-def { border-left: 3px solid var(--vscode-charts-green, #98c379); }
+.cat-comment { border-left: 3px solid var(--vscode-charts-gray, #7f848e); }
+.cat-other { border-left: 3px solid var(--vscode-charts-orange, #abb2bf); }

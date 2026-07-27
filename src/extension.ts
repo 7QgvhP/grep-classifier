@@ -1,350 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { TextDecoder } from 'util';
 import Parser from 'web-tree-sitter';
-
-// 分類カテゴリの定義
-type DataFlowCategory = '入力' | '出力' | '定義' | 'コメント' | 'その他';
-
-// 検索キーワードの一致情報を表すインターフェース
-interface GrepMatch {
-    fileUri: vscode.Uri;
-    line: number;
-    charStart: number;
-    charEnd: number;
-    content: string; // 該当行のテキスト
-    category: DataFlowCategory;
-}
-
-// Webviewに受け渡すためのシリアライズ可能な一致情報インターフェース
-interface GrepMatchSerializable {
-    fileUriStr: string;
-    line: number;
-    charStart: number;
-    charEnd: number;
-    content: string;
-    category: DataFlowCategory;
-}
-
-// ASTの各ノードから検索クエリに一致する識別子やコメント等を抽出し、データフロー分類を行う
-function findMatchesInTree(
-    node: Parser.SyntaxNode,
-    query: string,
-    fileUri: vscode.Uri,
-    lines: string[],
-    matchWholeWord: boolean
-): GrepMatch[] {
-    const matches: GrepMatch[] = [];
-    // クエリに構造体や配列のアクセス演算子が含まれているか判定
-    const hasOperator = query.includes('.') || query.includes('->') || query.includes('[');
-
-    function escapeRegExp(str: string): string {
-        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
-    const escapedQuery = escapeRegExp(query);
-    const wholeWordRegex = new RegExp(`\\b${escapedQuery}\\b`);
-
-    function traverse(currentNode: Parser.SyntaxNode) {
-        // コメントノード内のテキスト部分一致 / 単語全体一致
-        if (currentNode.type === 'comment') {
-            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
-            if (isMatch) {
-                const commentLines = currentNode.text.split(/\r?\n/);
-                const startRow = currentNode.startPosition.row;
-                
-                commentLines.forEach((commentLine, offset) => {
-                    const isLineMatch = matchWholeWord ? wholeWordRegex.test(commentLine) : commentLine.includes(query);
-                    if (isLineMatch) {
-                        const actualLine = startRow + offset;
-                        const lineContent = lines[actualLine];
-                        
-                        if (lineContent) {
-                            if (matchWholeWord) {
-                                const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
-                                let match;
-                                while ((match = globalRegex.exec(lineContent)) !== null) {
-                                    matches.push({
-                                        fileUri,
-                                        line: actualLine,
-                                        charStart: match.index,
-                                        charEnd: match.index + match[0].length,
-                                        content: lineContent,
-                                        category: 'コメント'
-                                    });
-                                }
-                            } else {
-                                let idx = lineContent.indexOf(query);
-                                while (idx !== -1) {
-                                    matches.push({
-                                        fileUri,
-                                        line: actualLine,
-                                        charStart: idx,
-                                        charEnd: idx + query.length,
-                                        content: lineContent,
-                                        category: 'コメント'
-                                    });
-                                    idx = lineContent.indexOf(query, idx + query.length);
-                                }
-                            }
-                        } else {
-                            matches.push({
-                                fileUri,
-                                line: actualLine,
-                                charStart: 0,
-                                charEnd: commentLine.length,
-                                content: commentLine,
-                                category: 'コメント'
-                            });
-                        }
-                    }
-                });
-                return; // コメントの子ノードは探索不要
-            }
-        }
-
-        // 構造体メンバーアクセスや配列アクセスの判定 (クエリに記号が含まれる場合のみ)
-        if (hasOperator && (currentNode.type === 'field_expression' || currentNode.type === 'subscript_expression')) {
-            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
-            if (isMatch) {
-                const category = classifyIdentifier(currentNode);
-                matches.push({
-                    fileUri,
-                    line: currentNode.startPosition.row,
-                    charStart: currentNode.startPosition.column,
-                    charEnd: currentNode.endPosition.column,
-                    content: lines[currentNode.startPosition.row],
-                    category
-                });
-                // 重複して子ノード（オブジェクト名やメンバー名単体）がヒットするのを防ぐため、巡回をスキップ
-                return;
-            }
-        }
-
-        // 識別子、構造体メンバー名の部分一致 / 完全一致
-        if (
-            currentNode.type === 'identifier' ||
-            currentNode.type === 'field_identifier'
-        ) {
-            const isMatch = matchWholeWord ? (currentNode.text === query) : currentNode.text.includes(query);
-            if (isMatch) {
-                const category = classifyIdentifier(currentNode);
-                matches.push({
-                    fileUri,
-                    line: currentNode.startPosition.row,
-                    charStart: currentNode.startPosition.column,
-                    charEnd: currentNode.endPosition.column,
-                    content: lines[currentNode.startPosition.row],
-                    category
-                });
-            }
-        }
-
-        // マクロ引数値ノードの部分一致 / 完全一致（複数マッチに対応）
-        if (currentNode.type === 'preproc_arg') {
-            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
-            if (isMatch) {
-                const lineContent = lines[currentNode.startPosition.row];
-                if (lineContent) {
-                    const category = classifyIdentifier(currentNode);
-                    if (matchWholeWord) {
-                        const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
-                        let match;
-                        while ((match = globalRegex.exec(lineContent)) !== null) {
-                            matches.push({
-                                fileUri,
-                                line: currentNode.startPosition.row,
-                                charStart: match.index,
-                                charEnd: match.index + match[0].length,
-                                content: lineContent,
-                                category
-                            });
-                        }
-                    } else {
-                        let idx = lineContent.indexOf(query);
-                        while (idx !== -1) {
-                            matches.push({
-                                fileUri,
-                                line: currentNode.startPosition.row,
-                                charStart: idx,
-                                charEnd: idx + query.length,
-                                content: lineContent,
-                                category
-                            });
-                            idx = lineContent.indexOf(query, idx + query.length);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 文字列リテラル内のテキスト部分一致 / 単語全体一致 (入力として扱う、複数マッチに対応)
-        if (currentNode.type === 'string_literal') {
-            const isMatch = matchWholeWord ? wholeWordRegex.test(currentNode.text) : currentNode.text.includes(query);
-            if (isMatch) {
-                const lineContent = lines[currentNode.startPosition.row];
-                if (lineContent) {
-                    if (matchWholeWord) {
-                        const globalRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
-                        let match;
-                        while ((match = globalRegex.exec(lineContent)) !== null) {
-                            matches.push({
-                                fileUri,
-                                line: currentNode.startPosition.row,
-                                charStart: match.index,
-                                charEnd: match.index + match[0].length,
-                                content: lineContent,
-                                category: '入力'
-                            });
-                        }
-                    } else {
-                        let idx = lineContent.indexOf(query);
-                        while (idx !== -1) {
-                            matches.push({
-                                fileUri,
-                                line: currentNode.startPosition.row,
-                                charStart: idx,
-                                charEnd: idx + query.length,
-                                content: lineContent,
-                                category: '入力'
-                            });
-                            idx = lineContent.indexOf(query, idx + query.length);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 子ノードを再帰的に走査
-        for (let i = 0; i < currentNode.childCount; i++) {
-            traverse(currentNode.child(i)!);
-        }
-    }
-
-    traverse(node);
-    return matches;
-}
-
-// ノードが対象ノード（親ノードなど）の物理的配下にあるかを判定する
-function isDescendantOf(node: Parser.SyntaxNode, target: Parser.SyntaxNode): boolean {
-    return target.startIndex <= node.startIndex && node.endIndex <= target.endIndex;
-}
-
-// 識別子ノードのコンテキスト（祖先ノードの関係性）からデータフロー分類を行う
-function classifyIdentifier(node: Parser.SyntaxNode): DataFlowCategory {
-    let current: Parser.SyntaxNode | null = node;
-
-    while (current) {
-        const parent: Parser.SyntaxNode | null = current.parent;
-        if (!parent) {
-            break;
-        }
-
-        // --- 1. 出力 (Output - 書き込み) の優先判定 ---
-        if (parent.type === 'assignment_expression') {
-            const left = parent.childForFieldName('left');
-            if (left && isDescendantOf(node, left)) {
-                return '出力';
-            }
-        }
-        if (parent.type === 'update_expression') {
-            return '出力';
-        }
-        if (parent.type === 'pointer_expression') {
-            const operator = parent.child(0);
-            if (operator && operator.text === '&') {
-                return '出力';
-            }
-        }
-
-        // --- 2. 入力 (Input - 参照) の優先判定 ---
-        if (parent.type === 'assignment_expression') {
-            const right = parent.childForFieldName('right');
-            if (right && isDescendantOf(node, right)) {
-                return '入力';
-            }
-        }
-        if (parent.type === 'init_declarator') {
-            const value = parent.childForFieldName('value');
-            if (value && isDescendantOf(node, value)) {
-                return '入力';
-            }
-        }
-        if (parent.type === 'if_statement' || parent.type === 'while_statement' || parent.type === 'for_statement') {
-            const condition = parent.childForFieldName('condition');
-            if (condition && isDescendantOf(node, condition)) {
-                return '入力';
-            }
-        }
-        if (parent.type === 'argument_list') {
-            return '入力';
-        }
-        if (
-            [
-                'binary_expression',
-                'return_statement',
-                'switch_statement',
-                'case_statement'
-            ].includes(parent.type)
-        ) {
-            return '入力';
-        }
-
-        // --- 3. 定義 (Definition) の判定 ---
-        if (parent.type === 'type_definition') {
-            const declarator = parent.childForFieldName('declarator');
-            if (declarator && isDescendantOf(node, declarator)) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'enumerator') {
-            return '定義';
-        }
-        if (parent.type === 'preproc_params') {
-            return '定義';
-        }
-        if (parent.type === 'declaration' || parent.type === 'parameter_declaration') {
-            const typeNode = parent.childForFieldName('type');
-            if (!(typeNode && isDescendantOf(node, typeNode))) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'init_declarator') {
-            const declarator = parent.childForFieldName('declarator');
-            if (declarator && isDescendantOf(node, declarator)) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'ERROR' && parent.parent && parent.parent.type === 'declaration') {
-            return '定義';
-        }
-        if (parent.type === 'function_definition') {
-            const declarator = parent.childForFieldName('declarator');
-            if (declarator && isDescendantOf(node, declarator)) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'preproc_def' || parent.type === 'preproc_function_def') {
-            const nameNode = parent.childForFieldName('name');
-            if (nameNode && nameNode.text === node.text) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'struct_specifier' || parent.type === 'union_specifier' || parent.type === 'enum_specifier') {
-            const nameNode = parent.childForFieldName('name');
-            if (nameNode && nameNode.text === node.text) {
-                return '定義';
-            }
-        }
-        if (parent.type === 'field_declaration') {
-            return '定義';
-        }
-
-        current = parent;
-    }
-
-    return 'その他';
-}
+import { findMatchesInTree } from './matcher';
+import { CATEGORIES, GrepMatch, GrepMatchSerializable } from './types';
 
 // Webview View のプロバイダー定義
 class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
@@ -352,6 +12,8 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _isReady = false;
     private _pendingQuery?: string;
+    // 文字コードごとのデコーダを再利用するためのキャッシュ
+    private readonly _decoderCache = new Map<string, TextDecoder>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -415,15 +77,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                     }
                     const rawMatches = await this._performSearch(query, matchWholeWord);
                     // Webviewに渡すシリアライズ形式への変換
-                    const matches: GrepMatchSerializable[] = rawMatches.map(m => ({
-                        fileUriStr: m.fileUri.toString(),
-                        line: m.line,
-                        charStart: m.charStart,
-                        charEnd: m.charEnd,
-                        content: m.content,
-                        category: m.category
+                    const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, ...rest }) => ({
+                        ...rest,
+                        fileUriStr: fileUri.toString()
                     }));
-                    webviewView.webview.postMessage({ type: 'results', matches, query, matchWholeWord });
+                    webviewView.webview.postMessage({ type: 'results', matches });
                     break;
                 }
                 case 'openFile': {
@@ -432,7 +90,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         const uri = vscode.Uri.parse(fileUriStr);
                         const doc = await vscode.workspace.openTextDocument(uri);
                         const editor = await vscode.window.showTextDocument(doc, { preserveFocus: !!preserveFocus });
-                        
+
                         const startPos = new vscode.Position(line, charStart);
                         const endPos = new vscode.Position(line, charEnd);
                         editor.selection = new vscode.Selection(startPos, endPos);
@@ -469,6 +127,35 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         return map[vscodeEncoding.toLowerCase()] || vscodeEncoding;
     }
 
+    // 対象ファイルの文字コード設定（files.encoding）に対応するデコーダを取得する
+    private _getDecoderFor(file: vscode.Uri): TextDecoder {
+        const vscodeEncoding = vscode.workspace.getConfiguration('files', file).get<string>('encoding') || 'utf8';
+        const encoding = this._getNormalizedEncoding(vscodeEncoding);
+
+        let decoder = this._decoderCache.get(encoding);
+        if (!decoder) {
+            decoder = new TextDecoder(encoding);
+            this._decoderCache.set(encoding, decoder);
+        }
+        return decoder;
+    }
+
+    // 単一ファイルを解析して一致箇所を抽出する
+    private async _searchInFile(file: vscode.Uri, query: string, matchWholeWord: boolean): Promise<GrepMatch[]> {
+        // 指定された文字コードでデコード
+        const buffer = await vscode.workspace.fs.readFile(file);
+        const content = this._getDecoderFor(file).decode(buffer);
+
+        // パフォーマンス最適化のため、まずは高速に簡易チェック（部分一致しなければ完全一致もしない）
+        if (!content.includes(query)) {
+            return [];
+        }
+
+        const tree = this._parser.parse(content);
+        const lines = content.split(/\r?\n/);
+        return findMatchesInTree(tree.rootNode, query, file, lines, matchWholeWord);
+    }
+
     // C言語ファイルへのGrep検索とデータフロー分類の実行
     private async _performSearch(query: string, matchWholeWord: boolean): Promise<GrepMatch[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -487,23 +174,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             const files = await vscode.workspace.findFiles('**/*.{c,h}', '**/node_modules/**');
             for (const file of files) {
                 try {
-                    // バイナリとして読み込む
-                    const buffer = fs.readFileSync(file.fsPath);
-                    // VS Codeの設定から文字コードを取得し正規化
-                    const vscodeEncoding = vscode.workspace.getConfiguration('files', file).get<string>('encoding') || 'utf8';
-                    const encoding = this._getNormalizedEncoding(vscodeEncoding);
-                    // 指定された文字コードでデコード
-                    const decoder = new TextDecoder(encoding);
-                    const content = decoder.decode(buffer);
-
-                    // パフォーマンス最適化のため、まずは高速に簡易チェック（部分一致しなければ完全一致もしない）
-                    if (!content.includes(query)) {
-                        continue;
-                    }
-                    const tree = this._parser.parse(content);
-                    const lines = content.split(/\r?\n/);
-                    const fileMatches = findMatchesInTree(tree.rootNode, query, file, lines, matchWholeWord);
-                    allMatches.push(...fileMatches);
+                    allMatches.push(...await this._searchInFile(file, query, matchWholeWord));
                 } catch (err) {
                     console.error(`ファイルの解析に失敗しました: ${file.fsPath}`, err);
                 }
@@ -513,616 +184,27 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         return allMatches;
     }
 
-    // Webviewに表示するHTMLを構築
+    // Webviewに表示するHTMLを構築（media配下のテンプレートを読み込みプレースホルダを置換）
     private _getHtmlForWebview(webview: vscode.Webview): string {
         const nonce = getNonce();
+        const mediaUri = vscode.Uri.joinPath(this._extensionUri, 'media');
+        const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, 'main.css'));
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, 'main.js'));
 
-        return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-    <style>
-        body {
-            padding: 8px 10px;
-            color: var(--vscode-foreground);
-            font-family: var(--vscode-font-family);
-            font-size: var(--vscode-font-size);
-            background-color: var(--vscode-sideBar-background);
-        }
-        
-        /* 検索コンテナの配置 */
-        .search-container {
-            display: flex;
-            margin-bottom: 12px;
-            position: sticky;
-            top: 0;
-            background-color: var(--vscode-sideBar-background);
-            z-index: 10;
-            padding-bottom: 6px;
-            border-bottom: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.2));
-        }
-        .search-input-control {
-            display: flex;
-            align-items: center;
-            flex-grow: 1;
-            background-color: var(--vscode-input-background);
-            border: 1px solid var(--vscode-input-border, transparent);
-            border-radius: 2px;
-            padding: 2px 2px 2px 6px;
-            position: relative;
-        }
-        .search-input-control:focus-within {
-            border-color: var(--vscode-focusBorder);
-            outline: 1px solid var(--vscode-focusBorder);
-        }
-        .search-input {
-            flex-grow: 1;
-            border: none;
-            background: transparent;
-            color: var(--vscode-input-foreground);
-            font-size: var(--vscode-font-size);
-            font-family: var(--vscode-font-family);
-            outline: none;
-            padding: 2px 0;
-            width: 100%;
-        }
-        .search-options {
-            display: flex;
-            align-items: center;
-            gap: 2px;
-            margin-left: 4px;
-        }
-        .toggle-button {
-            width: 20px;
-            height: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 1px solid transparent;
-            background: transparent;
-            color: var(--vscode-input-foreground);
-            opacity: 0.8;
-            cursor: pointer;
-            border-radius: 2px;
-            padding: 0;
-            outline: none;
-        }
-        .toggle-button:hover {
-            background-color: var(--vscode-inputOption-hoverBackground, rgba(128, 128, 128, 0.15));
-        }
-        .toggle-button.active {
-            background-color: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.2));
-            border-color: var(--vscode-inputOption-activeBorder, #007acc);
-            color: var(--vscode-inputOption-activeForeground, var(--vscode-input-foreground));
-            opacity: 1;
-        }
-        
-        /* カテゴリアコーディオン */
-        .category-container {
-            margin-bottom: 6px;
-            border-radius: 2px;
-            overflow: hidden;
-            border: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
-        }
-        .category-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 8px;
-            font-weight: bold;
-            cursor: pointer;
-            user-select: none;
-            background-color: var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.1));
-            color: var(--vscode-sideBarSectionHeader-foreground);
-        }
-        .category-header:hover {
-            background-color: var(--vscode-list-hoverBackground);
-        }
-        .category-title {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .category-count {
-            background-color: var(--vscode-badge-background);
-            color: var(--vscode-badge-foreground);
-            padding: 1px 5px;
-            border-radius: 10px;
-            font-size: 11px;
-        }
-        
-        .category-items {
-            display: none;
-            padding: 2px 0;
-            background-color: rgba(128, 128, 128, 0.02);
-        }
-        .category-items.expanded {
-            display: block;
-        }
-        
-        /* ファイルヘッダー */
-        .file-container {
-            margin-bottom: 2px;
-        }
-        .file-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 8px 4px 8px;
-            font-size: 12px;
-            cursor: pointer;
-            user-select: none;
-            color: var(--vscode-foreground);
-        }
-        .file-header:hover {
-            background-color: var(--vscode-list-hoverBackground);
-        }
-        .file-title {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .file-name {
-            font-weight: bold;
-            color: var(--vscode-textLink-foreground);
-        }
-        .file-count {
-            opacity: 0.6;
-            font-size: 11px;
-        }
-        .file-items {
-            display: none;
-            padding-left: 10px;
-            border-left: 1px solid var(--vscode-sideBar-border, rgba(128, 128, 128, 0.1));
-            margin-left: 10px;
-        }
-        .file-items.expanded {
-            display: block;
-        }
-        
-        /* 一致項目 (コンパクト表示) */
-        .match-item {
-            display: flex;
-            align-items: center;
-            padding: 3px 6px;
-            cursor: pointer;
-            gap: 8px;
-            border-radius: 2px;
-        }
-        .match-item:hover {
-            background-color: var(--vscode-list-hoverBackground);
-        }
-        .match-item.selected {
-            background-color: var(--vscode-list-focusBackground);
-            color: var(--vscode-list-focusForeground);
-            outline: 1px solid var(--vscode-list-focusOutline, transparent);
-        }
-        .match-line-number {
-            color: var(--vscode-editorLineNumber-foreground, #858585);
-            min-width: 20px;
-            text-align: right;
-            font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 11px;
-            user-select: none;
-        }
-        .match-code {
-            font-family: var(--vscode-editor-font-family, monospace);
-            font-size: 11px;
-            white-space: pre;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            opacity: 0.9;
-            flex-grow: 1;
-        }
-        
-        .info-text {
-            text-align: center;
-            opacity: 0.6;
-            margin-top: 20px;
-            font-size: 12px;
-        }
-        
-        /* カテゴリ毎の左線ボーダーワンポイント */
-        .cat-input { border-left: 3px solid var(--vscode-charts-blue, #3794ff); }
-        .cat-output { border-left: 3px solid var(--vscode-charts-red, #e06c75); }
-        .cat-def { border-left: 3px solid var(--vscode-charts-green, #98c379); }
-        .cat-comment { border-left: 3px solid var(--vscode-charts-gray, #7f848e); }
-        .cat-other { border-left: 3px solid var(--vscode-charts-orange, #abb2bf); }
-    </style>
-</head>
-<body>
-    <div class="search-container">
-        <div class="search-input-control">
-            <input type="text" id="search-input" class="search-input" placeholder="検索キーワードを入力（Enterで検索）..." />
-            <div class="search-options">
-                <button id="whole-word-toggle" class="toggle-button" title="単語全体に一致 (Match Whole Word)">
-                    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
-                        <path d="M15.5 12.5C15.776 12.5 16 12.724 16 13V13.5C16 14.327 15.327 15 14.5 15H1.5C0.673 15 0 14.327 0 13.5V13C0 12.724 0.224 12.5 0.5 12.5C0.776 12.5 1 12.724 1 13V13.5C1 13.775 1.224 14 1.5 14H14.5C14.776 14 15 13.775 15 13.5V13C15 12.724 15.224 12.5 15.5 12.5Z"/>
-                        <path fill-rule="evenodd" clip-rule="evenodd" d="M4.8584 5.6709C6.16516 5.73603 6.94308 6.48734 6.99707 7.69922L7 7.83594V11.5107C6.996 11.7596 6.80919 11.9649 6.56836 11.998L6.5 12.0029C6.24709 12.0029 6.038 11.8152 6.00488 11.5713L6 11.5029V11.4326C5.341 11.8096 4.73199 12.0029 4.16699 12.0029C2.941 12.0029 2 11.1399 2 9.83594C2.00003 8.68597 2.79247 7.83185 4.10645 7.67285C4.7283 7.59793 5.35918 7.64552 5.99902 7.81348C5.99202 7.07548 5.62762 6.70995 4.80762 6.66895C4.16686 6.637 3.7161 6.72717 3.45215 6.91211C3.22615 7.07111 2.91386 7.01604 2.75586 6.79004C2.5969 6.56404 2.65194 6.25174 2.87793 6.09375C3.31692 5.78579 3.91404 5.65006 4.66699 5.66406L4.8584 5.6709ZM5.79688 8.81836C5.25888 8.67037 4.73558 8.62843 4.22559 8.69043C3.40389 8.79054 2.99902 9.22747 2.99902 9.86035C2.99917 10.5911 3.47413 11.0273 4.16602 11.0273C4.62001 11.0273 5.17799 10.8168 5.83398 10.3848L5.99902 10.2725V8.87891L5.79688 8.81836Z"/>
-                        <path fill-rule="evenodd" clip-rule="evenodd" d="M9.55078 2.00586C9.78578 2.02986 9.97307 2.21715 9.99707 2.45215C10 2.46907 10 2.48601 10 2.50293V6.60254C10.418 6.22566 10.9371 6.00293 11.5 6.00293C12.881 6.00293 14 7.34596 14 9.00293C14 10.6599 12.881 12.0029 11.5 12.0029C10.9371 12.0029 10.418 11.7802 10 11.4033V11.5029C10 11.7619 9.80278 11.974 9.55078 12C9.53385 12.003 9.51693 12.0029 9.5 12.0029C9.224 12.0029 9 11.7789 9 11.5029V2.50293C9 2.486 9.00095 2.46907 9.00293 2.45215C9.02793 2.20015 9.241 2.00293 9.5 2.00293C9.51692 2.00293 9.53386 2.00388 9.55078 2.00586ZM11.4355 7.00391C11.0307 7.03208 10.5769 7.31545 10.29 7.82227C10.1232 8.12611 10.018 8.49479 10.002 8.89453C9.99995 8.92952 10 8.96597 10 9.00195C10 9.03795 10.001 9.07438 10.002 9.10938C10.018 9.50814 10.1222 9.87582 10.2891 10.1797C10.576 10.6875 11.0307 10.9728 11.4355 11C11.4565 11.002 11.478 11.002 11.5 11.002C11.522 11.002 11.5435 11.001 11.5645 11C11.9693 10.9728 12.424 10.6875 12.7109 10.1797C12.8778 9.87582 12.982 9.50814 12.998 9.10938C13 9.07438 13 9.03795 13 9.00195C13 8.96597 12.999 8.92952 12.998 8.89453C12.982 8.49479 12.8768 8.12611 12.71 7.82227C12.4231 7.31545 11.9693 7.03109 11.5645 7.00391C11.5435 7.00191 11.522 7.00195 11.5 7.00195C11.478 7.00195 11.4565 7.00291 11.4355 7.00391Z"/>
-                    </svg>
-                </button>
-            </div>
-        </div>
-    </div>
-    
-    <div id="results-container">
-        <div class="info-text">キーワードを入力して検索してください。</div>
-    </div>
+        const template = fs.readFileSync(path.join(mediaUri.fsPath, 'webview.html'), 'utf8');
 
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-        const searchInput = document.getElementById('search-input');
-        const wholeWordToggle = document.getElementById('whole-word-toggle');
-        const resultsContainer = document.getElementById('results-container');
-        let matchWholeWord = false;
-        let activeMatchIndex = -1;
+        // 置換値に $ が含まれても特殊解釈されないよう関数形式で置換する
+        const replacements: Record<string, string> = {
+            '{{cspSource}}': webview.cspSource,
+            '{{nonce}}': nonce,
+            '{{styleUri}}': styleUri.toString(),
+            '{{scriptUri}}': scriptUri.toString(),
+            '{{categoriesJson}}': JSON.stringify(CATEGORIES)
+        };
 
-        // 現在表示されている（アコーディオンが開いている）すべての.match-itemを取得
-        function getVisibleMatchItems() {
-            return Array.from(resultsContainer.querySelectorAll('.category-items.expanded .file-items.expanded .match-item'));
-        }
-
-        // 指定インデックスのアイテムをアクティブ表示にしてエディタで開く
-        function selectMatchItem(index, preserveFocus = true) {
-            const visibleItems = getVisibleMatchItems();
-            if (visibleItems.length === 0) return;
-
-            if (index < 0) index = 0;
-            if (index >= visibleItems.length) index = visibleItems.length - 1;
-
-            activeMatchIndex = index;
-
-            visibleItems.forEach((item, idx) => {
-                if (idx === index) {
-                    item.classList.add('selected');
-                    item.scrollIntoView({ block: 'nearest' });
-                    
-                    const fileUriStr = item.getAttribute('data-uri');
-                    const line = parseInt(item.getAttribute('data-line'), 10);
-                    const charStart = parseInt(item.getAttribute('data-start'), 10);
-                    const charEnd = parseInt(item.getAttribute('data-end'), 10);
-                    
-                    vscode.postMessage({
-                        type: 'openFile',
-                        fileUriStr,
-                        line,
-                        charStart,
-                        charEnd,
-                        preserveFocus
-                    });
-                } else {
-                    item.classList.remove('selected');
-                }
-            });
-
-            saveState();
-        }
-
-        // キーボード操作のハンドリング（上下キー、Enterキー）
-        window.addEventListener('keydown', (e) => {
-            if (e.target === searchInput) {
-                return;
-            }
-
-            const visibleItems = getVisibleMatchItems();
-            if (visibleItems.length === 0) return;
-
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                selectMatchItem(activeMatchIndex + 1, true);
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                if (activeMatchIndex === 0) {
-                    // 最初の項目でArrowUpを押した場合は入力欄にフォーカスを戻し選択を解除
-                    activeMatchIndex = -1;
-                    visibleItems.forEach(item => item.classList.remove('selected'));
-                    searchInput.focus();
-                    searchInput.select();
-                } else {
-                    selectMatchItem(activeMatchIndex - 1, true);
-                }
-            } else if (e.key === 'Enter') {
-                if (activeMatchIndex >= 0 && activeMatchIndex < visibleItems.length) {
-                    e.preventDefault();
-                    selectMatchItem(activeMatchIndex, false);
-                }
-            }
-        });
-
-        // 前回の状態を復元
-        const previousState = vscode.getState();
-        if (previousState) {
-            if (previousState.query) {
-                searchInput.value = previousState.query;
-            }
-            if (previousState.matchWholeWord) {
-                matchWholeWord = previousState.matchWholeWord;
-                wholeWordToggle.classList.toggle('active', matchWholeWord);
-            }
-            if (previousState.html) {
-                resultsContainer.innerHTML = previousState.html;
-                
-                const visibleItems = getVisibleMatchItems();
-                const currentSelected = resultsContainer.querySelector('.match-item.selected');
-                if (currentSelected) {
-                    activeMatchIndex = visibleItems.indexOf(currentSelected);
-                }
-            }
-        }
-
-        function triggerSearch() {
-            const query = searchInput.value.trim();
-            if (query) {
-                resultsContainer.innerHTML = '<div class="info-text">分析中...</div>';
-                vscode.postMessage({ 
-                    type: 'search', 
-                    query: query,
-                    matchWholeWord: matchWholeWord
-                });
-            }
-        }
-
-        searchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                triggerSearch();
-            } else if (e.key === 'ArrowDown') {
-                const visibleItems = getVisibleMatchItems();
-                if (visibleItems.length > 0) {
-                    e.preventDefault();
-                    searchInput.blur(); // 入力欄からフォーカスを外す
-                    selectMatchItem(0, true); // 最初の項目を選択
-                }
-            }
-        });
-
-        wholeWordToggle.addEventListener('click', () => {
-            matchWholeWord = !matchWholeWord;
-            wholeWordToggle.classList.toggle('active', matchWholeWord);
-            saveState();
-            triggerSearch();
-        });
-
-        // 拡張機能本体からのデータ受取
-        window.addEventListener('message', event => {
-            const message = event.data;
-            if (message.type === 'results') {
-                renderResults(message.matches, message.query);
-            } else if (message.type === 'setQueryAndSearch') {
-                searchInput.value = message.query;
-                triggerSearch();
-                // 検索実行後に入力欄にフォーカスを設定し、すぐにキーボード操作を行えるようにする
-                searchInput.focus();
-                searchInput.select();
-            }
-        });
-
-        // アコーディオンの展開・折りたたみ
-        function toggleCategory(id) {
-            const items = document.getElementById(id);
-            if (items) {
-                items.classList.toggle('expanded');
-                // 矢印の向きを切り替える
-                const header = items.previousElementSibling;
-                if (header) {
-                    const arrow = header.querySelector('.arrow');
-                    if (arrow) {
-                        arrow.textContent = items.classList.contains('expanded') ? '▼' : '▶';
-                    }
-                }
-
-                // 状態変化に伴いアクティブ項目のインデックスを再同期
-                const visibleItems = getVisibleMatchItems();
-                const currentSelected = resultsContainer.querySelector('.match-item.selected');
-                if (currentSelected) {
-                    const idx = visibleItems.indexOf(currentSelected);
-                    if (idx !== -1) {
-                        activeMatchIndex = idx;
-                    } else {
-                        currentSelected.classList.remove('selected');
-                        activeMatchIndex = -1;
-                    }
-                }
-
-                // 状態を維持するためにHTML全体をステートに記録
-                saveState();
-            }
-        }
-
-        // 一致箇所クリック時の処理
-        function openFile(fileUriStr, line, charStart, charEnd, preserveFocus = false) {
-            vscode.postMessage({
-                type: 'openFile',
-                fileUriStr: fileUriStr,
-                line: line,
-                charStart: charStart,
-                charEnd: charEnd,
-                preserveFocus: preserveFocus
-            });
-        }
-
-        // イベントデリゲーションによるクリックの検知と処理
-        resultsContainer.addEventListener('click', (e) => {
-            const target = e.target.closest('[data-action]');
-            if (!target) {
-                return;
-            }
-
-            const action = target.getAttribute('data-action');
-            if (action === 'toggle') {
-                const targetId = target.getAttribute('data-target');
-                toggleCategory(targetId);
-            } else if (action === 'open') {
-                const uriStr = target.getAttribute('data-uri');
-                const line = parseInt(target.getAttribute('data-line'), 10);
-                const charStart = parseInt(target.getAttribute('data-start'), 10);
-                const charEnd = parseInt(target.getAttribute('data-end'), 10);
-                
-                const visibleItems = getVisibleMatchItems();
-                const idx = visibleItems.indexOf(target);
-                if (idx !== -1) {
-                    activeMatchIndex = idx;
-                    visibleItems.forEach((item, i) => {
-                        if (i === idx) {
-                            item.classList.add('selected');
-                        } else {
-                            item.classList.remove('selected');
-                        }
-                    });
-                }
-                
-                // クリック時もフォーカスはWebview（サイドバー）に残し、そのまま上下キーで操作できるようにする
-                openFile(uriStr, line, charStart, charEnd, true);
-                saveState();
-            }
-        });
-
-        // ステートの保存
-        function saveState() {
-            vscode.setState({
-                query: searchInput.value.trim(),
-                matchWholeWord: matchWholeWord,
-                html: resultsContainer.innerHTML
-            });
-        }
-
-        // 検索結果のHTML生成と描画
-        function renderResults(matches, query) {
-            activeMatchIndex = -1; // インデックスをリセット
-            if (!matches || matches.length === 0) {
-                resultsContainer.innerHTML = '<div class="info-text">一致する箇所が見つかりませんでした。</div>';
-                saveState();
-                return;
-            }
-
-            const cats = {
-                '入力': { class: 'cat-input', list: [] },
-                '出力': { class: 'cat-output', list: [] },
-                '定義': { class: 'cat-def', list: [] },
-                'コメント': { class: 'cat-comment', list: [] },
-                'その他': { class: 'cat-other', list: [] }
-            };
-
-            matches.forEach(m => {
-                if (cats[m.category]) {
-                    cats[m.category].list.push(m);
-                }
-            });
-
-            let html = '';
-            let catIndex = 0;
-            
-            for (const catName in cats) {
-                const cat = cats[catName];
-                const count = cat.list.length;
-                if (count === 0) continue;
-
-                const catListId = 'cat-items-' + catIndex;
-                html += \`
-                <div class="category-container \${cat.class}">
-                    <div class="category-header" data-action="toggle" data-target="\${catListId}">
-                        <div class="category-title">
-                            <span>\${catName}</span>
-                            <span class="category-count">\${count}</span>
-                        </div>
-                        <span class="arrow">▼</span>
-                    </div>
-                    <div id="\${catListId}" class="category-items expanded">
-                \`;
-
-                // ファイルごとにグループ化
-                const filesGroup = {};
-                cat.list.forEach(m => {
-                    const uriStr = m.fileUriStr;
-                    if (!filesGroup[uriStr]) {
-                        const decodedUri = decodeURIComponent(uriStr);
-                        const fileName = decodedUri.substring(decodedUri.lastIndexOf('/') + 1);
-                        filesGroup[uriStr] = {
-                            fileName: fileName,
-                            matches: []
-                        };
-                    }
-                    filesGroup[uriStr].matches.push(m);
-                });
-
-                // ファイル名でソートした配列を作成
-                const sortedFiles = Object.keys(filesGroup).map(uriStr => ({
-                    uriStr: uriStr,
-                    fileName: filesGroup[uriStr].fileName,
-                    matches: filesGroup[uriStr].matches
-                })).sort((a, b) => a.fileName.localeCompare(b.fileName));
-
-                let fileIndex = 0;
-                sortedFiles.forEach(fileGroup => {
-                    const uriStr = fileGroup.uriStr;
-                    const fileCount = fileGroup.matches.length;
-                    const fileListId = \`\${catListId}-file-\${fileIndex}\`;
-                    
-                    html += \`
-                        <div class="file-container">
-                            <div class="file-header" data-action="toggle" data-target="\${fileListId}">
-                                <div class="file-title">
-                                    <span class="arrow">▼</span>
-                                    <span class="file-name">\${fileGroup.fileName}</span>
-                                </div>
-                                <span class="file-count">\${fileCount}</span>
-                            </div>
-                            <div id="\${fileListId}" class="file-items expanded">
-                    \`;
-
-                    // 一致箇所を行番号順にソート
-                    fileGroup.matches.sort((a, b) => a.line - b.line);
-
-                    fileGroup.matches.forEach(m => {
-                        const codeSnippet = m.content.trim();
-                        html += \`
-                                <div class="match-item" data-action="open" data-uri="\${uriStr}" data-line="\${m.line}" data-start="\${m.charStart}" data-end="\${m.charEnd}">
-                                    <span class="match-line-number">\${m.line + 1}</span>
-                                    <span class="match-code">\${escapeHtml(codeSnippet)}</span>
-                                </div>
-                        \`;
-                    });
-
-                    html += \`
-                            </div>
-                        </div>
-                    \`;
-                    fileIndex++;
-                });
-
-                html += \`
-                    </div>
-                </div>
-                \`;
-                catIndex++;
-            }
-
-            resultsContainer.innerHTML = html;
-            saveState();
-        }
-
-        // HTML特殊文字のエスケープ
-        function escapeHtml(str) {
-            return str
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
-
-        // 初期ロード完了時に検索窓をフォーカス
-        window.addEventListener('load', () => {
-            searchInput.focus();
-        });
-
-        // 初期化完了を拡張機能本体に通知
-        vscode.postMessage({ type: 'ready' });
-    </script>
-</body>
-</html>`;
+        return template.replace(/\{\{\w+\}\}/g, (placeholder) =>
+            placeholder in replacements ? replacements[placeholder] : placeholder
+        );
     }
 }
 
