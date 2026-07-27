@@ -56,25 +56,41 @@ export function findMatchesInTree(
         matchWholeWord ? text === query : text.includes(query);
 
     /**
-     * 指定行の中に現れるすべての出現位置を一致箇所として登録する。
+     * 指定行における対象ノードの列範囲を求める。
+     * 複数行にまたがるノード（ブロックコメント等）では行ごとに範囲が変わるため、
+     * 開始行では開始列から、終了行では終了列まで、中間行では行全体を対象とする。
+     */
+    const rangeInLine = (node: Parser.SyntaxNode, line: number, lineLength: number): { start: number; end: number } => ({
+        start: line === node.startPosition.row ? node.startPosition.column : 0,
+        end: line === node.endPosition.row ? node.endPosition.column : lineLength
+    });
+
+    /**
+     * 指定行のうちノードが占める範囲内に現れる、すべての出現位置を一致箇所として登録する。
      * コメント・マクロ定義値・文字列リテラルのように、
      * 1行に同じキーワードが複数現れうるノードで共通して使用する。
+     * 行全体ではなくノードの範囲だけを走査することで、
+     * 同一行にある他の一致箇所を重複して登録しないようにしている。
      */
     const collectOccurrences = (
         lineContent: string,
         line: number,
         category: DataFlowCategory,
-        functionName?: string
+        functionName: string | undefined,
+        rangeStart: number,
+        rangeEnd: number
     ): void => {
+        const target = lineContent.slice(rangeStart, rangeEnd);
+
         if (matchWholeWord) {
             globalWholeWordRegex.lastIndex = 0;
             let match: RegExpExecArray | null;
-            while ((match = globalWholeWordRegex.exec(lineContent)) !== null) {
+            while ((match = globalWholeWordRegex.exec(target)) !== null) {
                 matches.push({
                     fileUri,
                     line,
-                    charStart: match.index,
-                    charEnd: match.index + match[0].length,
+                    charStart: rangeStart + match.index,
+                    charEnd: rangeStart + match.index + match[0].length,
                     content: lineContent,
                     category,
                     functionName
@@ -85,18 +101,18 @@ export function findMatchesInTree(
                 }
             }
         } else {
-            let idx = lineContent.indexOf(query);
+            let idx = target.indexOf(query);
             while (idx !== -1) {
                 matches.push({
                     fileUri,
                     line,
-                    charStart: idx,
-                    charEnd: idx + query.length,
+                    charStart: rangeStart + idx,
+                    charEnd: rangeStart + idx + query.length,
                     content: lineContent,
                     category,
                     functionName
                 });
-                idx = lineContent.indexOf(query, idx + query.length);
+                idx = target.indexOf(query, idx + query.length);
             }
         }
     };
@@ -138,7 +154,8 @@ export function findMatchesInTree(
                 const lineContent = lines[actualLine];
 
                 if (lineContent) {
-                    collectOccurrences(lineContent, actualLine, 'コメント', functionName);
+                    const { start, end } = rangeInLine(currentNode, actualLine, lineContent.length);
+                    collectOccurrences(lineContent, actualLine, 'コメント', functionName, start, end);
                 } else {
                     matches.push({
                         fileUri,
@@ -175,7 +192,8 @@ export function findMatchesInTree(
             const row = currentNode.startPosition.row;
             const lineContent = lines[row];
             if (lineContent) {
-                collectOccurrences(lineContent, row, classifyIdentifier(currentNode), functionName);
+                const { start, end } = rangeInLine(currentNode, row, lineContent.length);
+                collectOccurrences(lineContent, row, classifyIdentifier(currentNode), functionName, start, end);
             }
         }
 
@@ -184,7 +202,8 @@ export function findMatchesInTree(
             const row = currentNode.startPosition.row;
             const lineContent = lines[row];
             if (lineContent) {
-                collectOccurrences(lineContent, row, '入力', functionName);
+                const { start, end } = rangeInLine(currentNode, row, lineContent.length);
+                collectOccurrences(lineContent, row, '入力', functionName, start, end);
             }
         }
 
