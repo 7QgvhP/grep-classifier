@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "2.0.0",
+  "version": "2.1.0",
 
 
 
@@ -10,6 +10,10 @@
 
 
   "publisher": "developer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/7QgvhP/c-grep-classifier.git"
+  },
 
   "engines": {
     "vscode": "^1.75.0"
@@ -24,6 +28,31 @@
   ],
 
   "contributes": {
+    "configuration": {
+      "title": "C-Grep Classifier",
+      "properties": {
+        "cGrepClassifier.includePattern": {
+          "type": "string",
+          "default": "**/*.{c,h}",
+          "markdownDescription": "検索対象とするファイルのglobパターン。例: `**/*.{c,h,inc}`"
+        },
+        "cGrepClassifier.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**"
+          ],
+          "markdownDescription": "検索対象から除外するglobパターンの一覧。例: `**/build/**`"
+        },
+        "cGrepClassifier.useDefaultExcludes": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "VS Code標準の除外設定（`#files.exclude#` および `#search.exclude#`）も併せて適用します。"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {

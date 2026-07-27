@@ -140,11 +140,27 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         return decoder;
     }
 
-    // 単一ファイルを解析して一致箇所を抽出する
-    private async _searchInFile(file: vscode.Uri, query: string, matchWholeWord: boolean): Promise<GrepMatch[]> {
+    /**
+     * 対象ファイルのテキストを取得する。
+     * エディタで開かれており未保存の編集がある場合は、
+     * ディスク上の内容ではなくエディタ側の内容を優先する。
+     */
+    private async _getFileContent(file: vscode.Uri): Promise<string> {
+        const dirtyDocument = vscode.workspace.textDocuments.find(
+            doc => doc.isDirty && doc.uri.toString() === file.toString()
+        );
+        if (dirtyDocument) {
+            return dirtyDocument.getText();
+        }
+
         // 指定された文字コードでデコード
         const buffer = await vscode.workspace.fs.readFile(file);
-        const content = this._getDecoderFor(file).decode(buffer);
+        return this._getDecoderFor(file).decode(buffer);
+    }
+
+    // 単一ファイルを解析して一致箇所を抽出する
+    private async _searchInFile(file: vscode.Uri, query: string, matchWholeWord: boolean): Promise<GrepMatch[]> {
+        const content = await this._getFileContent(file);
 
         // パフォーマンス最適化のため、まずは高速に簡易チェック（部分一致しなければ完全一致もしない）
         if (!content.includes(query)) {
@@ -154,6 +170,41 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         const tree = this._parser.parse(content);
         const lines = content.split(/\r?\n/);
         return findMatchesInTree(tree.rootNode, query, file, lines, matchWholeWord);
+    }
+
+    /**
+     * 設定から検索対象・除外パターンを組み立てる。
+     * 除外パターンの戻り値は findFiles の仕様に合わせ、
+     * undefined（VS Code標準の除外を適用）／null（除外なし）を使い分ける。
+     */
+    private _getSearchPatterns(): { include: string; exclude: string | null | undefined } {
+        const config = vscode.workspace.getConfiguration('cGrepClassifier');
+        const include = config.get<string>('includePattern')?.trim() || '**/*.{c,h}';
+        const useDefaultExcludes = config.get<boolean>('useDefaultExcludes') ?? true;
+
+        const excludes = [...(config.get<string[]>('excludePatterns') || [])];
+        if (useDefaultExcludes) {
+            // VS Code標準の除外設定のうち、有効化されているパターンを取り込む
+            for (const section of ['files', 'search']) {
+                const patterns = vscode.workspace.getConfiguration(section).get<Record<string, unknown>>('exclude') || {};
+                for (const [pattern, enabled] of Object.entries(patterns)) {
+                    // when条件付きの除外は評価できないため対象外とする
+                    if (enabled === true) {
+                        excludes.push(pattern);
+                    }
+                }
+            }
+        }
+
+        const uniqueExcludes = Array.from(new Set(excludes.map(p => p.trim()).filter(p => p.length > 0)));
+
+        if (uniqueExcludes.length === 0) {
+            // 標準の除外を使う設定であれば undefined（VS Codeの既定動作）に委ねる
+            return { include, exclude: useDefaultExcludes ? undefined : null };
+        }
+        // 複数パターンは中括弧でグループ化して1つのglobにまとめる
+        const exclude = uniqueExcludes.length === 1 ? uniqueExcludes[0] : `{${uniqueExcludes.join(',')}}`;
+        return { include, exclude };
     }
 
     // C言語ファイルへのGrep検索とデータフロー分類の実行
@@ -171,7 +222,8 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             title: "C言語ファイルを分析中...",
             cancellable: false
         }, async () => {
-            const files = await vscode.workspace.findFiles('**/*.{c,h}', '**/node_modules/**');
+            const { include, exclude } = this._getSearchPatterns();
+            const files = await vscode.workspace.findFiles(include, exclude);
             for (const file of files) {
                 try {
                     allMatches.push(...await this._searchInFile(file, query, matchWholeWord));
