@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "2.3.0",
+  "version": "2.4.0",
 
 
 
@@ -88,6 +88,10 @@
       {
         "command": "c-grep-classifier.openResultAtCursor",
         "title": "C-Grep: カーソル行の一致箇所を開く"
+      },
+      {
+        "command": "c-grep-classifier.toggleFunctionSummary",
+        "title": "C-Grep: 関数名一覧の表示を切り替え"
       }
     ],
     "menus": {

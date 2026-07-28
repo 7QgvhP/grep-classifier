@@ -6,6 +6,7 @@
 
     const searchInput = document.getElementById('search-input');
     const wholeWordToggle = document.getElementById('whole-word-toggle');
+    const functionSummaryToggle = document.getElementById('function-summary-toggle');
     const openInEditorButton = document.getElementById('open-in-editor');
     const resultsContainer = document.getElementById('results-container');
 
@@ -15,6 +16,10 @@
     let currentMatches = [];
     // 折りたたまれているアコーディオンのID（既定はすべて展開）
     let collapsedIds = new Set();
+    // 関数名一覧モード（一致箇所ではなく、出現する関数名のみを表示する）
+    let summaryMode = false;
+    // 一致箇所ごとに関数名を表示するか（設定 showEnclosingFunction に連動）
+    let showFunction = true;
 
     // ------------------------------------------------------------------
     // 状態の保存と復元
@@ -27,7 +32,9 @@
             matchWholeWord: matchWholeWord,
             matches: currentMatches,
             collapsedIds: Array.from(collapsedIds),
-            activeMatchIndex: activeMatchIndex
+            activeMatchIndex: activeMatchIndex,
+            summaryMode: summaryMode,
+            showFunction: showFunction
         });
     }
 
@@ -43,6 +50,10 @@
         matchWholeWord = !!previousState.matchWholeWord;
         wholeWordToggle.classList.toggle('active', matchWholeWord);
 
+        summaryMode = !!previousState.summaryMode;
+        functionSummaryToggle.classList.toggle('active', summaryMode);
+        showFunction = previousState.showFunction !== false;
+
         if (Array.isArray(previousState.collapsedIds)) {
             collapsedIds = new Set(previousState.collapsedIds);
         }
@@ -57,9 +68,12 @@
     // 一致項目の選択とエディタ連携
     // ------------------------------------------------------------------
 
-    // 現在表示されている（アコーディオンが開いている）すべての.match-itemを取得
+    // 現在表示されている（アコーディオンが開いている）すべての選択可能項目を取得
+    // 通常表示は「カテゴリ→ファイル」配下の一致項目、関数名一覧モードはカテゴリ直下の関数項目
     function getVisibleMatchItems() {
-        return Array.from(resultsContainer.querySelectorAll('.category-items.expanded .file-items.expanded .match-item'));
+        return Array.from(resultsContainer.querySelectorAll(
+            '.category-items.expanded .file-items.expanded .match-item, .category-items.expanded > .function-item'
+        ));
     }
 
     // 指定インデックスの項目にのみ選択スタイルを適用する（エディタ操作は行わない）
@@ -197,7 +211,7 @@
         const sorted = fileGroup.matches.slice().sort((a, b) => a.line - b.line);
         const itemsHtml = sorted.map(m => {
             // 所属関数が判明している場合のみ関数名を表示する（グローバル定義やマクロでは非表示）
-            const functionLabel = m.functionName
+            const functionLabel = showFunction && m.functionName
                 ? `<span class="match-function" title="所属関数: ${escapeHtml(m.functionName)}">${escapeHtml(m.functionName)}()</span>`
                 : '';
             return `
@@ -221,23 +235,52 @@
                         </div>`;
     }
 
+    // 関数名一覧モードの項目HTMLを生成する（出現順に重複なく関数名を並べる）
+    function buildFunctionItemsHtml(list) {
+        const functions = new Map();
+        list.forEach(m => {
+            if (m.functionName && !functions.has(m.functionName)) {
+                functions.set(m.functionName, m);
+            }
+        });
+
+        let html = '';
+        functions.forEach((m, name) => {
+            html += `
+                        <div class="match-item function-item" data-action="open" data-uri="${m.fileUriStr}" data-line="${m.line}" data-start="${m.charStart}" data-end="${m.charEnd}">
+                            <span class="match-function" title="最初の一致箇所へジャンプします">${escapeHtml(name)}()</span>
+                        </div>`;
+        });
+        return { html, count: functions.size };
+    }
+
     // カテゴリ単位のアコーディオンHTMLを生成する
     function buildCategoryHtml(category, list, catListId) {
         const state = accordionState(catListId);
-        const filesHtml = groupByFile(list)
-            .map((fileGroup, fileIndex) => buildFileHtml(fileGroup, `${catListId}-file-${fileIndex}`))
-            .join('');
+
+        let innerHtml;
+        let countLabel;
+        if (summaryMode) {
+            const summary = buildFunctionItemsHtml(list);
+            innerHtml = summary.html;
+            countLabel = `${list.length}件 / ${summary.count}関数`;
+        } else {
+            innerHtml = groupByFile(list)
+                .map((fileGroup, fileIndex) => buildFileHtml(fileGroup, `${catListId}-file-${fileIndex}`))
+                .join('');
+            countLabel = String(list.length);
+        }
 
         return `
                 <div class="category-container ${category.cssClass}">
                     <div class="category-header" data-action="toggle" data-target="${catListId}">
                         <div class="category-title">
                             <span>${category.name}</span>
-                            <span class="category-count">${list.length}</span>
+                            <span class="category-count">${countLabel}</span>
                         </div>
                         <span class="arrow">${state.arrow}</span>
                     </div>
-                    <div id="${catListId}" class="category-items${state.className}">${filesHtml}
+                    <div id="${catListId}" class="category-items${state.className}">${innerHtml}
                     </div>
                 </div>`;
     }
@@ -348,6 +391,23 @@
         vscode.postMessage({ type: 'openInEditor' });
     });
 
+    // 保持している結果を描画し直す（検索は実行しない）
+    function rerenderCurrentResults() {
+        if (currentMatches.length > 0) {
+            renderResults(currentMatches);
+        } else {
+            saveState();
+        }
+    }
+
+    // 関数名一覧モードの切り替え（エディタの結果ドキュメントにも反映させる）
+    functionSummaryToggle.addEventListener('click', () => {
+        summaryMode = !summaryMode;
+        functionSummaryToggle.classList.toggle('active', summaryMode);
+        vscode.postMessage({ type: 'setSummaryMode', enabled: summaryMode });
+        rerenderCurrentResults();
+    });
+
     wholeWordToggle.addEventListener('click', () => {
         matchWholeWord = !matchWholeWord;
         wholeWordToggle.classList.toggle('active', matchWholeWord);
@@ -380,7 +440,13 @@
         if (message.type === 'results') {
             // 新しい検索結果はすべて展開した状態で表示する（すぐにキー操作で巡回できるようにするため）
             collapsedIds.clear();
+            showFunction = message.showFunction !== false;
             renderResults(message.matches);
+        } else if (message.type === 'setSummaryMode') {
+            // コマンドによる切り替えをサイドバーの表示にも反映する
+            summaryMode = !!message.enabled;
+            functionSummaryToggle.classList.toggle('active', summaryMode);
+            rerenderCurrentResults();
         } else if (message.type === 'setQueryAndSearch') {
             searchInput.value = message.query;
             triggerSearch();

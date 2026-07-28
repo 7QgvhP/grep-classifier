@@ -53,6 +53,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
         private readonly _resultDocument: ResultDocumentProvider
     ) {}
 
+    // 関数名一覧モードを切り替え、サイドバーの表示状態も同期する
+    public toggleSummaryMode(): void {
+        const enabled = !this._resultDocument.summaryMode;
+        this._resultDocument.setSummaryMode(enabled);
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'setSummaryMode', enabled });
+        }
+    }
+
     // 検索結果をテキストドキュメントとしてエディタに表示する
     public async showResultsInEditor(): Promise<void> {
         if (!this._resultDocument.hasResult) {
@@ -118,18 +127,17 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         return;
                     }
                     const rawMatches = await this._performSearch(query, matchWholeWord);
-                    // 所属関数の表示が無効な場合は関数名を送信しない
+                    // 一致箇所ごとの関数名を表示するかどうかの設定
                     const showFunction = vscode.workspace.getConfiguration('cGrepClassifier')
                         .get<boolean>('showEnclosingFunction') ?? true;
                     // Webviewに渡すシリアライズ形式への変換
-                    const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, functionName, ...rest }) => ({
+                    const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, ...rest }) => ({
                         ...rest,
-                        functionName: showFunction ? functionName : undefined,
                         fileUriStr: fileUri.toString()
                     }));
-                    webviewView.webview.postMessage({ type: 'results', matches });
+                    webviewView.webview.postMessage({ type: 'results', matches, showFunction });
                     // エディタ表示用の検索結果ドキュメントも更新する
-                    this._resultDocument.update(query, matchWholeWord, rawMatches);
+                    this._resultDocument.update(query, matchWholeWord, rawMatches, showFunction);
                     break;
                 }
                 case 'openFile': {
@@ -143,6 +151,11 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                 }
                 case 'openInEditor': {
                     await this.showResultsInEditor();
+                    break;
+                }
+                case 'setSummaryMode': {
+                    // サイドバーでの切り替えをエディタの結果ドキュメントにも反映する
+                    this._resultDocument.setSummaryMode(!!data.enabled);
                     break;
                 }
             }
@@ -381,7 +394,12 @@ export async function activate(context: vscode.ExtensionContext) {
         await revealMatch(location, searchHighlightDecorationType, false);
     });
 
-    context.subscriptions.push(showResultsCommand, openResultCommand);
+    // 関数名一覧モードを切り替えるコマンド
+    const toggleSummaryCommand = vscode.commands.registerCommand('c-grep-classifier.toggleFunctionSummary', () => {
+        provider.toggleSummaryMode();
+    });
+
+    context.subscriptions.push(showResultsCommand, openResultCommand, toggleSummaryCommand);
 
     // 検索コマンドの登録（選択テキストがあれば検索、なければサイドバーをフォーカス）
     const searchCommand = vscode.commands.registerCommand('c-grep-classifier.search', async () => {

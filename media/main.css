@@ -210,6 +210,14 @@ body {
     opacity: 0.85;
     user-select: none;
 }
+/* 関数名一覧モードの項目（関数名のみを表示するため幅制限を解除する） */
+.function-item {
+    padding-left: 14px;
+}
+.function-item .match-function {
+    max-width: none;
+    opacity: 1;
+}
 .match-code {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px;
