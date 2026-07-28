@@ -6,6 +6,7 @@
 
     const searchInput = document.getElementById('search-input');
     const wholeWordToggle = document.getElementById('whole-word-toggle');
+    const openInEditorButton = document.getElementById('open-in-editor');
     const resultsContainer = document.getElementById('results-container');
 
     let matchWholeWord = false;
@@ -340,6 +341,11 @@
                 selectMatchItem(0, true); // 最初の項目を選択
             }
         }
+    });
+
+    // 検索結果をテキストドキュメントとしてエディタに表示する
+    openInEditorButton.addEventListener('click', () => {
+        vscode.postMessage({ type: 'openInEditor' });
     });
 
     wholeWordToggle.addEventListener('click', () => {

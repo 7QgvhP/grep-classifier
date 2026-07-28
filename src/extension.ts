@@ -4,7 +4,38 @@ import * as path from 'path';
 import { TextDecoder } from 'util';
 import Parser from 'web-tree-sitter';
 import { findMatchesInTree } from './matcher';
+import { RESULT_SCHEME, RESULT_URI, ResultDocumentProvider, ResultLocation } from './resultDocument';
 import { CATEGORIES, GrepMatch, GrepMatchSerializable } from './types';
+
+/**
+ * 一致箇所をエディタで開き、選択とハイライトを適用する。
+ * サイドバーからの遷移と検索結果ドキュメントからの遷移で共通して使用する。
+ */
+async function revealMatch(
+    location: ResultLocation,
+    decorationType: vscode.TextEditorDecorationType,
+    preserveFocus: boolean
+): Promise<void> {
+    try {
+        const doc = await vscode.workspace.openTextDocument(location.uri);
+        const editor = await vscode.window.showTextDocument(doc, { preserveFocus });
+
+        const startPos = new vscode.Position(location.line, location.charStart);
+        const endPos = new vscode.Position(location.line, location.charEnd);
+        editor.selection = new vscode.Selection(startPos, endPos);
+        editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenter);
+
+        // 既存のすべての表示中エディタのデコレーションをクリア
+        for (const visibleEditor of vscode.window.visibleTextEditors) {
+            visibleEditor.setDecorations(decorationType, []);
+        }
+
+        // 新規にデコレーションを設定してハイライト
+        editor.setDecorations(decorationType, [new vscode.Range(startPos, endPos)]);
+    } catch (err) {
+        vscode.window.showErrorMessage(`ファイルを開くことができませんでした: ${err}`);
+    }
+}
 
 // Webview View のプロバイダー定義
 class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
@@ -18,8 +49,19 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private readonly _parser: Parser,
-        private readonly _searchHighlightDecorationType: vscode.TextEditorDecorationType
+        private readonly _searchHighlightDecorationType: vscode.TextEditorDecorationType,
+        private readonly _resultDocument: ResultDocumentProvider
     ) {}
+
+    // 検索結果をテキストドキュメントとしてエディタに表示する
+    public async showResultsInEditor(): Promise<void> {
+        if (!this._resultDocument.hasResult) {
+            vscode.window.showInformationMessage('先に検索を実行してください。');
+            return;
+        }
+        const doc = await vscode.workspace.openTextDocument(RESULT_URI);
+        await vscode.window.showTextDocument(doc, { preview: false });
+    }
 
     // 選択テキストによる検索をトリガーするメソッド
     public searchForSelection(query: string) {
@@ -86,31 +128,21 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         fileUriStr: fileUri.toString()
                     }));
                     webviewView.webview.postMessage({ type: 'results', matches });
+                    // エディタ表示用の検索結果ドキュメントも更新する
+                    this._resultDocument.update(query, matchWholeWord, rawMatches);
                     break;
                 }
                 case 'openFile': {
                     const { fileUriStr, line, charStart, charEnd, preserveFocus } = data;
-                    try {
-                        const uri = vscode.Uri.parse(fileUriStr);
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        const editor = await vscode.window.showTextDocument(doc, { preserveFocus: !!preserveFocus });
-
-                        const startPos = new vscode.Position(line, charStart);
-                        const endPos = new vscode.Position(line, charEnd);
-                        editor.selection = new vscode.Selection(startPos, endPos);
-                        editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenter);
-
-                        // 既存のすべての表示中エディタのデコレーションをクリア
-                        for (const visibleEditor of vscode.window.visibleTextEditors) {
-                            visibleEditor.setDecorations(this._searchHighlightDecorationType, []);
-                        }
-
-                        // 新規にデコレーションを設定してハイライト
-                        const range = new vscode.Range(startPos, endPos);
-                        editor.setDecorations(this._searchHighlightDecorationType, [range]);
-                    } catch (err) {
-                        vscode.window.showErrorMessage(`ファイルを開くことができませんでした: ${err}`);
-                    }
+                    await revealMatch(
+                        { uri: vscode.Uri.parse(fileUriStr), line, charStart, charEnd },
+                        this._searchHighlightDecorationType,
+                        !!preserveFocus
+                    );
+                    break;
+                }
+                case 'openInEditor': {
+                    await this.showResultsInEditor();
                     break;
                 }
             }
@@ -299,16 +331,57 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
+    // 検索結果をテキストドキュメントとして提供するプロバイダーの登録
+    const resultDocument = new ResultDocumentProvider();
+    context.subscriptions.push(
+        resultDocument,
+        vscode.workspace.registerTextDocumentContentProvider(RESULT_SCHEME, resultDocument),
+        // Ctrl+クリック（定義へ移動）で該当箇所へジャンプできるようにする
+        vscode.languages.registerDefinitionProvider({ scheme: RESULT_SCHEME }, {
+            provideDefinition(document, position) {
+                const location = resultDocument.getLocationAt(position.line);
+                if (!location) {
+                    return undefined;
+                }
+                return new vscode.Location(
+                    location.uri,
+                    new vscode.Range(location.line, location.charStart, location.line, location.charEnd)
+                );
+            }
+        })
+    );
+
     // Webview View Provider のインスタンス化と登録
     const provider = new GrepWebviewViewProvider(
         context.extensionUri,
         parser,
-        searchHighlightDecorationType
+        searchHighlightDecorationType,
+        resultDocument
     );
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(GrepWebviewViewProvider.viewType, provider)
     );
+
+    // 検索結果をエディタで開くコマンド
+    const showResultsCommand = vscode.commands.registerCommand('c-grep-classifier.showResultsInEditor', async () => {
+        await provider.showResultsInEditor();
+    });
+
+    // 検索結果ドキュメント上でカーソル行の一致箇所を開くコマンド（Enterキーに割り当て）
+    const openResultCommand = vscode.commands.registerCommand('c-grep-classifier.openResultAtCursor', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.document.uri.scheme !== RESULT_SCHEME) {
+            return;
+        }
+        const location = resultDocument.getLocationAt(editor.selection.active.line);
+        if (!location) {
+            return;
+        }
+        await revealMatch(location, searchHighlightDecorationType, false);
+    });
+
+    context.subscriptions.push(showResultsCommand, openResultCommand);
 
     // 検索コマンドの登録（選択テキストがあれば検索、なければサイドバーをフォーカス）
     const searchCommand = vscode.commands.registerCommand('c-grep-classifier.search', async () => {

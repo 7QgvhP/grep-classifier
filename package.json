@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "2.2.2",
+  "version": "2.3.0",
 
 
 
@@ -80,14 +80,35 @@
       {
         "command": "c-grep-classifier.search",
         "title": "C-Grep: データフロー分類検索を実行"
+      },
+      {
+        "command": "c-grep-classifier.showResultsInEditor",
+        "title": "C-Grep: 検索結果をエディタで開く"
+      },
+      {
+        "command": "c-grep-classifier.openResultAtCursor",
+        "title": "C-Grep: カーソル行の一致箇所を開く"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "c-grep-classifier.openResultAtCursor",
+          "when": "false"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "c-grep-classifier.search",
         "key": "alt+q",
         "mac": "alt+q",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "c-grep-classifier.openResultAtCursor",
+        "key": "enter",
+        "when": "editorTextFocus && resourceScheme == 'cgrep-result'"
       }
     ]
   },

@@ -66,6 +66,12 @@ body {
 .toggle-button:hover {
     background-color: var(--vscode-inputOption-hoverBackground, rgba(128, 128, 128, 0.15));
 }
+/* 検索窓の外に置く操作ボタン */
+.action-button {
+    margin-left: 4px;
+    flex-shrink: 0;
+    align-self: center;
+}
 .toggle-button.active {
     background-color: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.2));
     border-color: var(--vscode-inputOption-activeBorder, #007acc);
