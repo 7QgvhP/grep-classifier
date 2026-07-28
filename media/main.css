@@ -173,6 +173,13 @@ body {
     color: var(--vscode-list-focusForeground);
     outline: 1px solid var(--vscode-list-focusOutline, transparent);
 }
+/*
+ * 行番号・関数名は縮小させず、コード列（flex-basis: 0）だけが
+ * 余白を伸縮するようにしている。
+ * コード列の基準幅を 0 にしておかないと、コード全文の幅が基準となって
+ * 常に幅不足と判定され、行番号や関数名までFlexboxの縮小対象となり、
+ * サイドバー幅を変えるたびにコードの開始位置がずれてしまう。
+ */
 .match-line-number {
     color: var(--vscode-editorLineNumber-foreground, #858585);
     min-width: 20px;
@@ -180,6 +187,7 @@ body {
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px;
     user-select: none;
+    flex: 0 0 auto;
 }
 /* 一致箇所が属する関数名 */
 .match-function {
@@ -189,8 +197,10 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 45%;
-    flex-shrink: 1;
+    /* 幅に連動する % 指定にすると上限値自体が変動するため固定値とする */
+    max-width: 120px;
+    min-width: 0;
+    flex: 0 1 auto;
     opacity: 0.85;
     user-select: none;
 }
@@ -201,8 +211,9 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0.9;
-    flex-grow: 1;
-    min-width: 0;
+    flex: 1 1 0;
+    /* サイドバーを極端に狭めてもコードが完全に消えないようにする */
+    min-width: 50px;
 }
 
 .info-text {
