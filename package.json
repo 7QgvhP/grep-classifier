@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "2.4.1",
+  "version": "2.4.2",
 
 
 
@@ -56,6 +56,24 @@
           "default": true,
           "markdownDescription": "検索結果の各項目に、一致箇所が属する関数名を表示します。"
         }
+      }
+    },
+    "languages": [
+      {
+        "id": "cgrep-result",
+        "aliases": [
+          "C-Grep 検索結果"
+        ],
+        "extensions": [
+          ".cgrep"
+        ]
+      }
+    ],
+    "configurationDefaults": {
+      "[cgrep-result]": {
+        "editor.bracketPairColorization.enabled": false,
+        "editor.guides.bracketPairs": false,
+        "editor.matchBrackets": "never"
       }
     },
     "viewsContainers": {

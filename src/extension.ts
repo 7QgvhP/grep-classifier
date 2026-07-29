@@ -4,7 +4,7 @@ import * as path from 'path';
 import { TextDecoder } from 'util';
 import Parser from 'web-tree-sitter';
 import { findMatchesInTree } from './matcher';
-import { RESULT_SCHEME, RESULT_URI, ResultDocumentProvider, ResultLocation } from './resultDocument';
+import { RESULT_LANGUAGE_ID, RESULT_SCHEME, RESULT_URI, ResultDocumentProvider, ResultLocation } from './resultDocument';
 import { CATEGORIES, GrepMatch, GrepMatchSerializable } from './types';
 
 /**
@@ -68,7 +68,15 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showInformationMessage('先に検索を実行してください。');
             return;
         }
-        const doc = await vscode.workspace.openTextDocument(RESULT_URI);
+        let doc = await vscode.workspace.openTextDocument(RESULT_URI);
+        // 専用の言語IDを割り当てる（括弧の色分けを無効化するため）
+        if (doc.languageId !== RESULT_LANGUAGE_ID) {
+            try {
+                doc = await vscode.languages.setTextDocumentLanguage(doc, RESULT_LANGUAGE_ID);
+            } catch (err) {
+                console.error('検索結果ドキュメントの言語設定に失敗しました', err);
+            }
+        }
         await vscode.window.showTextDocument(doc, { preview: false });
     }
 

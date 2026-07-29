@@ -4,6 +4,10 @@ import { CATEGORIES, GrepMatch } from './types';
 // 検索結果ドキュメントのURIスキーム
 export const RESULT_SCHEME = 'cgrep-result';
 
+// 検索結果ドキュメントの言語ID（package.json の contributes.languages に対応）
+// 括弧の色分けを無効化するために専用の言語として扱う
+export const RESULT_LANGUAGE_ID = 'cgrep-result';
+
 // 検索結果ドキュメントのURI。常に同一のため、再検索時は同じタブが更新される
 export const RESULT_URI = vscode.Uri.parse(`${RESULT_SCHEME}:C-Grep 検索結果.cgrep`);
 
