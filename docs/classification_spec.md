@@ -361,6 +361,26 @@ struct Point {
 
 ---
 
+#### パターン11: ファイルスコープの式文（前置マクロ宣言の救済）
+
+```c
+typedef union { BYTE a; } HOGE_T;
+GLOBAL HOGE_T hoge2;         // hoge2 → 定義
+
+GLOBAL union hogestruct {
+    BYTE a;
+} hoge3;                     // hoge3 → 定義
+```
+
+C言語ではファイルスコープに式文は存在し得ないため、`translation_unit` の直下に現れた `expression_statement` 配下の識別子は、宣言の解釈失敗とみなして「定義」として救済します。
+
+前置マクロ（`GLOBAL` など）と、`union` / `struct` の本体付き定義や `typedef` が組み合わさると、tree-sitter がこれらの宣言を `declaration` ではなく `expression_statement` として解釈する場合があります。
+
+> [!NOTE]
+> 関数内の式文（`compound_statement` 配下）はこの救済の対象外です。関数内の代入や参照は、より優先度の高い出力・入力のパターンで判定されます。
+
+---
+
 ### 2.4 その他（❓ 未分類）
 
 上記のすべてのパターンに合致せず、ASTのルートノードまで辿りきった場合に「その他」として分類されます。

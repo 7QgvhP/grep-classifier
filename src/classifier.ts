@@ -115,6 +115,12 @@ function checkDefinition(node: Parser.SyntaxNode, parent: Parser.SyntaxNode): Da
     if (parent.type === 'ERROR' && parent.parent && parent.parent.type === 'declaration') {
         return '定義';
     }
+    // ファイルスコープに式文は存在し得ないため、宣言の解釈失敗とみなして救済する。
+    // 例: union の本体付き定義や typedef union のあとに現れる `GLOBAL BYTE hoge;` は、
+    //     tree-sitter が declaration ではなく expression_statement として解釈することがある
+    if (parent.type === 'expression_statement' && parent.parent && parent.parent.type === 'translation_unit') {
+        return '定義';
+    }
     // 関数定義の宣言子（関数名）
     if (parent.type === 'function_definition') {
         const declarator = parent.childForFieldName('declarator');
