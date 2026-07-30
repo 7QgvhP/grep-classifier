@@ -372,9 +372,18 @@ GLOBAL union hogestruct {
 } hoge3;                     // hoge3 → 定義
 ```
 
-C言語ではファイルスコープに式文は存在し得ないため、`translation_unit` の直下に現れた `expression_statement` 配下の識別子は、宣言の解釈失敗とみなして「定義」として救済します。
+C言語ではファイルスコープに式文は存在し得ないため、**関数の外**に現れた `expression_statement` 配下の識別子は、宣言の解釈失敗とみなして「定義」として救済します。
 
 前置マクロ（`GLOBAL` など）と、`union` / `struct` の本体付き定義や `typedef` が組み合わさると、tree-sitter がこれらの宣言を `declaration` ではなく `expression_statement` として解釈する場合があります。
+
+ファイルスコープかどうかは、祖先ノードに `compound_statement`（関数本体）が現れないことで判定します。親が `translation_unit` かどうかでは判定しません。ヘッダのインクルードガードや `#ifdef` で囲まれている場合、宣言は `preproc_ifdef` 配下に置かれるためです。
+
+```c
+#ifndef HOGO_H
+#define HOGO_H
+GLOBAL SBYTE deftmp_real_es;   // hoge → 定義（expression_statement > preproc_ifdef > translation_unit）
+#endif
+```
 
 > [!NOTE]
 > 関数内の式文（`compound_statement` 配下）はこの救済の対象外です。関数内の代入や参照は、より優先度の高い出力・入力のパターンで判定されます。

@@ -7,6 +7,22 @@ function isDescendantOf(node: Parser.SyntaxNode, target: Parser.SyntaxNode): boo
 }
 
 /**
+ * ノードがファイルスコープ（関数の外）に位置するかを判定する。
+ * 祖先に関数本体が現れなければファイルスコープとみなすため、
+ * インクルードガードや `#ifdef` で囲まれていても正しく判定できる。
+ */
+function isAtFileScope(node: Parser.SyntaxNode): boolean {
+    let current: Parser.SyntaxNode | null = node.parent;
+    while (current) {
+        if (current.type === 'compound_statement' || current.type === 'function_definition') {
+            return false;
+        }
+        current = current.parent;
+    }
+    return true;
+}
+
+/**
  * 出力（書き込み）の判定。
  * 最も優先度が高く、代入の左辺・インクリメント・アドレス取得が該当する。
  * 該当しない場合は null を返し、後続の判定へ委ねる。
@@ -117,8 +133,10 @@ function checkDefinition(node: Parser.SyntaxNode, parent: Parser.SyntaxNode): Da
     }
     // ファイルスコープに式文は存在し得ないため、宣言の解釈失敗とみなして救済する。
     // 例: union の本体付き定義や typedef union のあとに現れる `GLOBAL BYTE hoge;` は、
-    //     tree-sitter が declaration ではなく expression_statement として解釈することがある
-    if (parent.type === 'expression_statement' && parent.parent && parent.parent.type === 'translation_unit') {
+    //     tree-sitter が declaration ではなく expression_statement として解釈することがある。
+    //     インクルードガードや #ifdef で囲まれている場合も対象とするため、
+    //     親が translation_unit かどうかではなく「関数の外か」で判定する
+    if (parent.type === 'expression_statement' && isAtFileScope(parent)) {
         return '定義';
     }
     // 関数定義の宣言子（関数名）
