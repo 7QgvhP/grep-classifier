@@ -5,7 +5,7 @@ import { TextDecoder } from 'util';
 import Parser from 'web-tree-sitter';
 import { findMatches } from './matcher';
 import { RESULT_LANGUAGE_ID, RESULT_SCHEME, RESULT_URI, ResultDocumentProvider, ResultLocation } from './resultDocument';
-import { CATEGORIES, GrepMatch, GrepMatchSerializable } from './types';
+import { CATEGORIES, DETAILS, GrepMatch, GrepMatchSerializable } from './types';
 
 /**
  * 一致箇所をエディタで開き、選択とハイライトを適用する。
@@ -135,17 +135,19 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
                         return;
                     }
                     const rawMatches = await this._performSearch(query, matchWholeWord);
+                    const config = vscode.workspace.getConfiguration('cGrepClassifier');
                     // 一致箇所ごとの関数名を表示するかどうかの設定
-                    const showFunction = vscode.workspace.getConfiguration('cGrepClassifier')
-                        .get<boolean>('showEnclosingFunction') ?? true;
+                    const showFunction = config.get<boolean>('showEnclosingFunction') ?? true;
+                    // サブ分類（条件判定・代入の右辺など）で細分化するかどうかの設定
+                    const showDetail = config.get<string>('detailLevel') === 'detailed';
                     // Webviewに渡すシリアライズ形式への変換
                     const matches: GrepMatchSerializable[] = rawMatches.map(({ fileUri, ...rest }) => ({
                         ...rest,
                         fileUriStr: fileUri.toString()
                     }));
-                    webviewView.webview.postMessage({ type: 'results', matches, showFunction });
+                    webviewView.webview.postMessage({ type: 'results', matches, showFunction, showDetail });
                     // エディタ表示用の検索結果ドキュメントも更新する
-                    this._resultDocument.update(query, matchWholeWord, rawMatches, showFunction);
+                    this._resultDocument.update(query, matchWholeWord, rawMatches, showFunction, showDetail);
                     break;
                 }
                 case 'openFile': {
@@ -308,7 +310,8 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
             '{{nonce}}': nonce,
             '{{styleUri}}': styleUri.toString(),
             '{{scriptUri}}': scriptUri.toString(),
-            '{{categoriesJson}}': JSON.stringify(CATEGORIES)
+            '{{categoriesJson}}': JSON.stringify(CATEGORIES),
+            '{{detailsJson}}': JSON.stringify(DETAILS)
         };
 
         return template.replace(/\{\{\w+\}\}/g, (placeholder) =>

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CATEGORIES, GrepMatch } from './types';
+import { CATEGORIES, DETAILS, GrepMatch } from './types';
 
 // 検索結果ドキュメントのURIスキーム
 export const RESULT_SCHEME = 'cgrep-result';
@@ -35,7 +35,8 @@ function buildContent(
     query: string,
     matchWholeWord: boolean,
     matches: GrepMatch[],
-    showFunction: boolean
+    showFunction: boolean,
+    showDetail: boolean
 ): { content: string; locations: Map<number, ResultLocation> } {
     const locations = new Map<number, ResultLocation>();
     const lines: string[] = [];
@@ -46,6 +47,61 @@ function buildContent(
             locations.set(lines.length, location);
         }
         lines.push(text);
+    };
+
+    /**
+     * 一致箇所をファイル単位にまとめて出力する。
+     * @param items 出力対象の一致箇所
+     * @param indent ファイル名行のインデント幅（一致行はさらに2文字下げる）
+     */
+    const pushFileGroups = (items: GrepMatch[], indent: number): void => {
+        const filePad = ' '.repeat(indent);
+        const rowPad = ' '.repeat(indent + 2);
+
+        // ファイル単位にまとめ、ファイル名の辞書順に並べる
+        const groups = new Map<string, GrepMatch[]>();
+        for (const match of items) {
+            const key = match.fileUri.toString();
+            const group = groups.get(key);
+            if (group) {
+                group.push(match);
+            } else {
+                groups.set(key, [match]);
+            }
+        }
+
+        const sortedGroups = Array.from(groups.values())
+            .map(group => ({ items: group, label: vscode.workspace.asRelativePath(group[0].fileUri) }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+
+        for (const group of sortedGroups) {
+            push(`${filePad}${group.label} (${group.items.length})`);
+
+            const sorted = [...group.items].sort((a, b) => a.line - b.line || a.charStart - b.charStart);
+            // 行番号と関数名の桁幅を揃えて読みやすくする
+            const numberWidth = Math.max(...sorted.map(item => String(item.line + 1).length));
+            // 関数名を表示しない設定の場合は列自体を出力しない
+            const functionWidth = showFunction
+                ? Math.min(
+                    FUNCTION_NAME_MAX,
+                    Math.max(0, ...sorted.map(item => (item.functionName ? item.functionName.length + 2 : 0)))
+                )
+                : 0;
+
+            for (const item of sorted) {
+                const number = String(item.line + 1).padStart(numberWidth);
+                const functionLabel = functionWidth > 0
+                    ? '  ' + truncate(item.functionName ? `${item.functionName}()` : '', functionWidth).padEnd(functionWidth)
+                    : '';
+                push(`${rowPad}${number}:${functionLabel}  ${item.content.trim()}`, {
+                    uri: item.fileUri,
+                    line: item.line,
+                    charStart: item.charStart,
+                    charEnd: item.charEnd
+                });
+            }
+            push('');
+        }
     };
 
     const fileCount = new Set(matches.map(m => m.fileUri.toString())).size;
@@ -70,49 +126,27 @@ function buildContent(
         push(`■ ${category.name} (${list.length})`);
         push('');
 
-        // ファイル単位にまとめ、ファイル名の辞書順に並べる
-        const groups = new Map<string, GrepMatch[]>();
-        for (const match of list) {
-            const key = match.fileUri.toString();
-            const group = groups.get(key);
-            if (group) {
-                group.push(match);
-            } else {
-                groups.set(key, [match]);
+        const detailOrder = DETAILS[category.name];
+        if (showDetail && detailOrder.length > 0) {
+            // サブ分類ごとにまとめて出力する（定義順に並べ、該当なしは省略）
+            const shown = new Set<string>();
+            for (const detail of detailOrder) {
+                const sub = list.filter(m => m.detail === detail);
+                if (sub.length === 0) {
+                    continue;
+                }
+                shown.add(detail);
+                push(`  ● ${detail} (${sub.length})`);
+                pushFileGroups(sub, 4);
             }
-        }
-
-        const sortedGroups = Array.from(groups.values())
-            .map(items => ({ items, label: vscode.workspace.asRelativePath(items[0].fileUri) }))
-            .sort((a, b) => a.label.localeCompare(b.label));
-
-        for (const group of sortedGroups) {
-            push(`  ${group.label} (${group.items.length})`);
-
-            const items = [...group.items].sort((a, b) => a.line - b.line || a.charStart - b.charStart);
-            // 行番号と関数名の桁幅を揃えて読みやすくする
-            const numberWidth = Math.max(...items.map(item => String(item.line + 1).length));
-            // 関数名を表示しない設定の場合は列自体を出力しない
-            const functionWidth = showFunction
-                ? Math.min(
-                    FUNCTION_NAME_MAX,
-                    Math.max(0, ...items.map(item => (item.functionName ? item.functionName.length + 2 : 0)))
-                )
-                : 0;
-
-            for (const item of items) {
-                const number = String(item.line + 1).padStart(numberWidth);
-                const functionLabel = functionWidth > 0
-                    ? '  ' + truncate(item.functionName ? `${item.functionName}()` : '', functionWidth).padEnd(functionWidth)
-                    : '';
-                push(`    ${number}:${functionLabel}  ${item.content.trim()}`, {
-                    uri: item.fileUri,
-                    line: item.line,
-                    charStart: item.charStart,
-                    charEnd: item.charEnd
-                });
+            // 既知のサブ分類に該当しないものの受け皿
+            const rest = list.filter(m => !shown.has(m.detail));
+            if (rest.length > 0) {
+                push(`  ● 分類なし (${rest.length})`);
+                pushFileGroups(rest, 4);
             }
-            push('');
+        } else {
+            pushFileGroups(list, 2);
         }
     }
 
@@ -197,14 +231,22 @@ export class ResultDocumentProvider implements vscode.TextDocumentContentProvide
     private _matchWholeWord = false;
     private _matches: GrepMatch[] = [];
     private _showFunction = true;
+    private _showDetail = false;
     private _summaryMode = false;
 
     // 検索結果を受け取り、本文と行対応表を再構築して開いているタブへ反映する
-    public update(query: string, matchWholeWord: boolean, matches: GrepMatch[], showFunction: boolean): void {
+    public update(
+        query: string,
+        matchWholeWord: boolean,
+        matches: GrepMatch[],
+        showFunction: boolean,
+        showDetail: boolean
+    ): void {
         this._query = query;
         this._matchWholeWord = matchWholeWord;
         this._matches = matches;
         this._showFunction = showFunction;
+        this._showDetail = showDetail;
         this._hasResult = true;
         this._rebuild();
     }
@@ -234,7 +276,7 @@ export class ResultDocumentProvider implements vscode.TextDocumentContentProvide
     private _rebuild(): void {
         const { content, locations } = this._summaryMode
             ? buildSummaryContent(this._query, this._matchWholeWord, this._matches)
-            : buildContent(this._query, this._matchWholeWord, this._matches, this._showFunction);
+            : buildContent(this._query, this._matchWholeWord, this._matches, this._showFunction, this._showDetail);
         this._content = content;
         this._locations = locations;
         this._onDidChange.fire(RESULT_URI);

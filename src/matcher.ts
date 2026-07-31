@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import Parser from 'web-tree-sitter';
 import { classifyIdentifier } from './classifier';
-import { DataFlowCategory, GrepMatch } from './types';
+import { ClassificationResult, GrepMatch } from './types';
 
 /**
  * 無条件に「入力」として扱うノード種別。
@@ -115,14 +115,14 @@ function findEnclosingFunctionName(node: Parser.SyntaxNode): string | undefined 
  * コメント・文字列は種別だけで確定し、それ以外は
  * 祖先ノードのコンテキストによるデータフロー分類に委ねる。
  */
-function categorizeNode(node: Parser.SyntaxNode): DataFlowCategory {
+function categorizeNode(node: Parser.SyntaxNode): ClassificationResult {
     let current: Parser.SyntaxNode | null = node;
     while (current) {
         if (current.type === 'comment') {
-            return 'コメント';
+            return { category: 'コメント', detail: '' };
         }
         if (INPUT_NODE_TYPES.has(current.type)) {
-            return '入力';
+            return { category: '入力', detail: '文字列' };
         }
         current = current.parent;
     }
@@ -162,6 +162,7 @@ export function findMatches(
         // 一致範囲を含む最小のノードを特定する
         const node = tree.rootNode.descendantForIndex(offset, offset + query.length - 1);
         const row = rowAt(lineStarts, offset);
+        const { category, detail } = categorizeNode(node);
 
         matches.push({
             fileUri,
@@ -169,7 +170,8 @@ export function findMatches(
             charStart: offset - lineStarts[row],
             charEnd: offset - lineStarts[row] + query.length,
             content: lines[row],
-            category: categorizeNode(node),
+            category,
+            detail,
             functionName: findEnclosingFunctionName(node)
         });
     }

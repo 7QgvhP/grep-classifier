@@ -130,6 +130,39 @@ body {
     display: block;
 }
 
+/* サブ分類（条件判定・代入の右辺など）のヘッダー */
+.detail-container {
+    margin-bottom: 2px;
+}
+.detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+}
+.detail-header:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+.detail-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.detail-name {
+    font-weight: bold;
+    opacity: 0.85;
+}
+.detail-items {
+    display: none;
+    padding-left: 8px;
+}
+.detail-items.expanded {
+    display: block;
+}
+
 /* ファイルヘッダー */
 .file-container {
     margin-bottom: 2px;

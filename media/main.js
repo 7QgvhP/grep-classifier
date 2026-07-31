@@ -3,6 +3,8 @@
 
     // 拡張機能本体から注入された分類カテゴリ定義（名称・表示順・CSSクラス）
     const CATEGORIES = window.__CATEGORIES__ || [];
+    // サブ分類の一覧と表示順（カテゴリ名をキーとする）
+    const DETAILS = window.__DETAILS__ || {};
 
     const searchInput = document.getElementById('search-input');
     const wholeWordToggle = document.getElementById('whole-word-toggle');
@@ -20,6 +22,8 @@
     let summaryMode = false;
     // 一致箇所ごとに関数名を表示するか（設定 showEnclosingFunction に連動）
     let showFunction = true;
+    // サブ分類で細分化して表示するか（設定 detailLevel に連動）
+    let showDetail = false;
 
     // ------------------------------------------------------------------
     // 状態の保存と復元
@@ -34,7 +38,8 @@
             collapsedIds: Array.from(collapsedIds),
             activeMatchIndex: activeMatchIndex,
             summaryMode: summaryMode,
-            showFunction: showFunction
+            showFunction: showFunction,
+            showDetail: showDetail
         });
     }
 
@@ -53,6 +58,7 @@
         summaryMode = !!previousState.summaryMode;
         functionSummaryToggle.classList.toggle('active', summaryMode);
         showFunction = previousState.showFunction !== false;
+        showDetail = previousState.showDetail === true;
 
         if (Array.isArray(previousState.collapsedIds)) {
             collapsedIds = new Set(previousState.collapsedIds);
@@ -68,12 +74,11 @@
     // 一致項目の選択とエディタ連携
     // ------------------------------------------------------------------
 
-    // 現在表示されている（アコーディオンが開いている）すべての選択可能項目を取得
-    // 通常表示は「カテゴリ→ファイル」配下の一致項目、関数名一覧モードはカテゴリ直下の関数項目
+    // 現在画面に表示されている（アコーディオンが開いている）すべての選択可能項目を取得
+    // 階層の深さが表示モードによって変わるため、実際に描画されているかで判定する
     function getVisibleMatchItems() {
-        return Array.from(resultsContainer.querySelectorAll(
-            '.category-items.expanded .file-items.expanded .match-item, .category-items.expanded > .function-item'
-        ));
+        return Array.from(resultsContainer.querySelectorAll('.match-item'))
+            .filter(item => item.offsetParent !== null);
     }
 
     // 指定インデックスの項目にのみ選択スタイルを適用する（エディタ操作は行わない）
@@ -270,21 +275,67 @@
         return `合計 ${total} 件 / ${files.size} ファイル`;
     }
 
+    // ファイル単位のアコーディオンをまとめて生成する
+    function buildFileGroupsHtml(list, idPrefix) {
+        return groupByFile(list)
+            .map((fileGroup, fileIndex) => buildFileHtml(fileGroup, `${idPrefix}-file-${fileIndex}`))
+            .join('');
+    }
+
+    // サブ分類単位のアコーディオンHTMLを生成する
+    function buildDetailHtml(detailName, list, detailListId) {
+        const state = accordionState(detailListId);
+        return `
+                    <div class="detail-container">
+                        <div class="detail-header" data-action="toggle" data-target="${detailListId}">
+                            <div class="detail-title">
+                                <span class="arrow">${state.arrow}</span>
+                                <span class="detail-name">${escapeHtml(detailName)}</span>
+                            </div>
+                            <span class="file-count">${list.length}</span>
+                        </div>
+                        <div id="${detailListId}" class="detail-items${state.className}">${buildFileGroupsHtml(list, detailListId)}
+                        </div>
+                    </div>`;
+    }
+
+    // サブ分類ごとに区切ったHTMLを生成する（定義順に並べ、該当なしは省略）
+    function buildDetailGroupsHtml(category, list, catListId) {
+        const order = DETAILS[category.name] || [];
+        const shown = new Set();
+        let html = '';
+
+        order.forEach((detail, index) => {
+            const sub = list.filter(m => m.detail === detail);
+            if (sub.length === 0) {
+                return;
+            }
+            shown.add(detail);
+            html += buildDetailHtml(detail, sub, `${catListId}-detail-${index}`);
+        });
+
+        // 既知のサブ分類に該当しないものの受け皿
+        const rest = list.filter(m => !shown.has(m.detail));
+        if (rest.length > 0) {
+            html += buildDetailHtml('分類なし', rest, `${catListId}-detail-rest`);
+        }
+        return html;
+    }
+
     // カテゴリ単位のアコーディオンHTMLを生成する
     function buildCategoryHtml(category, list, catListId) {
         const state = accordionState(catListId);
 
         let innerHtml;
-        let countLabel;
+        let countLabel = String(list.length);
         if (summaryMode) {
             const summary = buildFunctionItemsHtml(list);
             innerHtml = summary.html;
             countLabel = `${list.length}件 / ${summary.count}関数`;
+        } else if (showDetail && (DETAILS[category.name] || []).length > 0) {
+            innerHtml = buildDetailGroupsHtml(category, list, catListId);
         } else {
-            innerHtml = groupByFile(list)
-                .map((fileGroup, fileIndex) => buildFileHtml(fileGroup, `${catListId}-file-${fileIndex}`))
-                .join('');
-            countLabel = String(list.length);
+            innerHtml = buildFileGroupsHtml(list, catListId);
         }
 
         return `
@@ -457,6 +508,7 @@
             // 新しい検索結果はすべて展開した状態で表示する（すぐにキー操作で巡回できるようにするため）
             collapsedIds.clear();
             showFunction = message.showFunction !== false;
+            showDetail = message.showDetail === true;
             renderResults(message.matches);
         } else if (message.type === 'setSummaryMode') {
             // コマンドによる切り替えをサイドバーの表示にも反映する

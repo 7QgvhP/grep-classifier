@@ -2,7 +2,7 @@
   "name": "c-grep-classifier",
   "displayName": "C-Grep Classifier",
   "description": "C言語の検索結果をデータフロー（入力・出力・定義）で分類して表示する拡張機能",
-  "version": "3.0.0",
+  "version": "3.1.0",
 
 
 
@@ -55,6 +55,19 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "検索結果の各項目に、一致箇所が属する関数名を表示します。"
+        },
+        "cGrepClassifier.detailLevel": {
+          "type": "string",
+          "enum": [
+            "category",
+            "detailed"
+          ],
+          "enumDescriptions": [
+            "「入力」「出力」「定義」などの大分類のみで表示します。",
+            "大分類の下に「条件判定」「代入の右辺」などのサブ分類を追加して表示します。"
+          ],
+          "default": "category",
+          "markdownDescription": "検索結果の分類の細かさを指定します。`detailed` にすると、使用されている文脈でさらに細分化して表示します。"
         }
       }
     },
