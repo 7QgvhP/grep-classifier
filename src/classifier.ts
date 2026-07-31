@@ -29,15 +29,42 @@ function isAtFileScope(node: Parser.SyntaxNode): boolean {
 }
 
 /**
+ * ノードが配列添字（`subscript_expression` の index 部分）の内側にあるかを判定する。
+ * `arr[hoge] = 0;` の `hoge` は書き込み対象ではなく、添字として読まれているため、
+ * 代入の左辺に含まれていても「出力」ではなく「入力」として扱う必要がある。
+ * @param left 判定範囲の上限となるノード（代入式の左辺）
+ */
+function isInsideSubscriptIndex(node: Parser.SyntaxNode, left: Parser.SyntaxNode): boolean {
+    let current: Parser.SyntaxNode | null = node;
+    while (current && isDescendantOf(current, left)) {
+        const parent: Parser.SyntaxNode | null = current.parent;
+        if (!parent) {
+            return false;
+        }
+        if (parent.type === 'subscript_expression') {
+            const index = parent.childForFieldName('index');
+            if (index && isDescendantOf(node, index)) {
+                return true;
+            }
+        }
+        if (!isDescendantOf(parent, left)) {
+            return false;
+        }
+        current = parent;
+    }
+    return false;
+}
+
+/**
  * 出力（書き込み）の判定。
  * 最も優先度が高く、代入の左辺・インクリメント・アドレス取得が該当する。
  * 該当しない場合は null を返し、後続の判定へ委ねる。
  */
 function checkOutput(node: Parser.SyntaxNode, parent: Parser.SyntaxNode): ClassificationResult | null {
-    // 代入式の左辺（複合代入も含む）
+    // 代入式の左辺（複合代入も含む）。ただし添字として読まれている場合は除く
     if (parent.type === 'assignment_expression') {
         const left = parent.childForFieldName('left');
-        if (left && isDescendantOf(node, left)) {
+        if (left && isDescendantOf(node, left) && !isInsideSubscriptIndex(node, left)) {
             return { category: '出力', detail: '代入' };
         }
     }
@@ -104,6 +131,13 @@ function checkInput(node: Parser.SyntaxNode, parent: Parser.SyntaxNode): Classif
     const detail = inputContextOf(node, parent);
     if (detail) {
         return { category: '入力', detail };
+    }
+    // 代入の左辺に含まれていても、配列添字として読まれている場合は書き込みではなく参照
+    if (parent.type === 'assignment_expression') {
+        const left = parent.childForFieldName('left');
+        if (left && isDescendantOf(node, left) && isInsideSubscriptIndex(node, left)) {
+            return { category: '入力', detail: INPUT_GENERIC };
+        }
     }
     // 二項演算での参照。文脈は後段で改めて特定する
     if (parent.type === 'binary_expression') {
