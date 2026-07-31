@@ -254,6 +254,22 @@
         return { html, count: functions.size };
     }
 
+    // 検索結果全体の合計を表す1行を生成する
+    function buildTotalSummary() {
+        const total = currentMatches.length;
+        if (summaryMode) {
+            const names = new Set();
+            currentMatches.forEach(m => {
+                if (m.functionName) {
+                    names.add(m.functionName);
+                }
+            });
+            return `合計 ${total} 件 / ${names.size} 関数`;
+        }
+        const files = new Set(currentMatches.map(m => m.fileUriStr));
+        return `合計 ${total} 件 / ${files.size} ファイル`;
+    }
+
     // カテゴリ単位のアコーディオンHTMLを生成する
     function buildCategoryHtml(category, list, catListId) {
         const state = accordionState(catListId);
@@ -300,7 +316,7 @@
             return;
         }
 
-        let html = '';
+        let html = `<div class="result-summary">${escapeHtml(buildTotalSummary())}</div>`;
         CATEGORIES.forEach((category, catIndex) => {
             const list = currentMatches.filter(m => m.category === category.name);
             if (list.length === 0) {

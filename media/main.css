@@ -79,6 +79,14 @@ body {
     opacity: 1;
 }
 
+/* 検索結果全体の合計件数 */
+.result-summary {
+    padding: 0 4px 6px;
+    font-size: 11px;
+    opacity: 0.75;
+    user-select: none;
+}
+
 /* カテゴリアコーディオン */
 .category-container {
     margin-bottom: 6px;
