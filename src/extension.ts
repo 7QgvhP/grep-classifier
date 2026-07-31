@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import Parser from 'web-tree-sitter';
-import { findMatchesInTree } from './matcher';
+import { findMatches } from './matcher';
 import { RESULT_LANGUAGE_ID, RESULT_SCHEME, RESULT_URI, ResultDocumentProvider, ResultLocation } from './resultDocument';
 import { CATEGORIES, GrepMatch, GrepMatchSerializable } from './types';
 
@@ -226,7 +226,7 @@ class GrepWebviewViewProvider implements vscode.WebviewViewProvider {
 
         const tree = this._parser.parse(content);
         const lines = content.split(/\r?\n/);
-        return findMatchesInTree(tree.rootNode, query, file, lines, matchWholeWord);
+        return findMatches(tree, query, file, content, lines, matchWholeWord);
     }
 
     /**

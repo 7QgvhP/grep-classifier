@@ -3,9 +3,79 @@ import Parser from 'web-tree-sitter';
 import { classifyIdentifier } from './classifier';
 import { DataFlowCategory, GrepMatch } from './types';
 
+/**
+ * 無条件に「入力」として扱うノード種別。
+ * 文字列リテラル・文字定数・`#include <...>` のパスが該当する。
+ */
+const INPUT_NODE_TYPES = new Set([
+    'string_literal',
+    'string_content',
+    'char_literal',
+    'character',
+    'escape_sequence',
+    'system_lib_string'
+]);
+
 // 正規表現のメタ文字をエスケープする
 function escapeRegExp(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * ファイル本文から検索キーワードの出現位置をすべて列挙する。
+ * ここがVS Code標準検索（grep）と同一の処理であり、
+ * 以降の分類は「列挙された位置」に対して行うため、取りこぼしが起きない。
+ */
+function collectOffsets(content: string, query: string, matchWholeWord: boolean): number[] {
+    const offsets: number[] = [];
+    if (query.length === 0) {
+        return offsets;
+    }
+
+    if (matchWholeWord) {
+        const regex = new RegExp(`\\b${escapeRegExp(query)}\\b`, 'g');
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(content)) !== null) {
+            offsets.push(match.index);
+            // 空文字に一致した場合の無限ループを防止
+            if (match[0].length === 0) {
+                regex.lastIndex++;
+            }
+        }
+    } else {
+        let idx = content.indexOf(query);
+        while (idx !== -1) {
+            offsets.push(idx);
+            idx = content.indexOf(query, idx + query.length);
+        }
+    }
+    return offsets;
+}
+
+// 各行の開始オフセットを求める（オフセットから行番号を引くための索引）
+function buildLineStarts(content: string): number[] {
+    const starts = [0];
+    for (let i = 0; i < content.length; i++) {
+        if (content[i] === '\n') {
+            starts.push(i + 1);
+        }
+    }
+    return starts;
+}
+
+// 行頭オフセット配列に対する二分探索で、指定オフセットの行番号を求める
+function rowAt(lineStarts: number[], offset: number): number {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (lineStarts[mid] <= offset) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return low;
 }
 
 /**
@@ -24,195 +94,85 @@ function extractFunctionName(declarator: Parser.SyntaxNode): string | undefined 
     return undefined;
 }
 
+// 一致箇所が属する関数の名前を祖先ノードから取得する（関数外の場合は undefined）
+function findEnclosingFunctionName(node: Parser.SyntaxNode): string | undefined {
+    let current: Parser.SyntaxNode | null = node;
+    while (current) {
+        if (current.type === 'function_definition') {
+            const declarator = current.childForFieldName('declarator');
+            const name = declarator ? extractFunctionName(declarator) : undefined;
+            if (name) {
+                return name;
+            }
+        }
+        current = current.parent;
+    }
+    return undefined;
+}
+
 /**
- * ASTの各ノードから検索クエリに一致する識別子やコメント等を抽出し、データフロー分類を行う
- * @param node 走査を開始するルートノード
+ * 一致位置に対応するノードから分類カテゴリを決定する。
+ * コメント・文字列は種別だけで確定し、それ以外は
+ * 祖先ノードのコンテキストによるデータフロー分類に委ねる。
+ */
+function categorizeNode(node: Parser.SyntaxNode): DataFlowCategory {
+    let current: Parser.SyntaxNode | null = node;
+    while (current) {
+        if (current.type === 'comment') {
+            return 'コメント';
+        }
+        if (INPUT_NODE_TYPES.has(current.type)) {
+            return '入力';
+        }
+        current = current.parent;
+    }
+    return classifyIdentifier(node);
+}
+
+/**
+ * 検索キーワードの全出現位置を列挙し、それぞれをデータフロー分類する。
+ *
+ * 出現位置の列挙はテキスト検索で行うため、件数はVS Code標準検索と一致する。
+ * 分類できない箇所は結果から消えるのではなく「その他」に分類される。
+ *
+ * @param tree 解析済みの構文木
  * @param query 検索キーワード
  * @param fileUri 対象ファイルのURI
+ * @param content 対象ファイルの本文
  * @param lines 対象ファイルを行単位に分割したテキスト
  * @param matchWholeWord 単語全体に一致するもののみを抽出するか
  */
-export function findMatchesInTree(
-    node: Parser.SyntaxNode,
+export function findMatches(
+    tree: Parser.Tree,
     query: string,
     fileUri: vscode.Uri,
+    content: string,
     lines: string[],
     matchWholeWord: boolean
 ): GrepMatch[] {
-    const matches: GrepMatch[] = [];
-    // クエリに構造体や配列のアクセス演算子が含まれているか判定
-    const hasOperator = query.includes('.') || query.includes('->') || query.includes('[');
-
-    const escapedQuery = escapeRegExp(query);
-    const wholeWordRegex = new RegExp(`\\b${escapedQuery}\\b`);
-    const globalWholeWordRegex = new RegExp(`\\b${escapedQuery}\\b`, 'g');
-
-    // テキスト中に一致が存在するかを判定する（コメント・文字列・マクロ値向け：単語境界で評価）
-    const containsMatch = (text: string): boolean =>
-        matchWholeWord ? wholeWordRegex.test(text) : text.includes(query);
-
-    // ノードのテキストが一致するかを判定する（識別子・アクセス式向け：単語全体一致時は完全一致）
-    const isNodeMatch = (text: string): boolean =>
-        matchWholeWord ? text === query : text.includes(query);
-
-    /**
-     * 指定行における対象ノードの列範囲を求める。
-     * 複数行にまたがるノード（ブロックコメント等）では行ごとに範囲が変わるため、
-     * 開始行では開始列から、終了行では終了列まで、中間行では行全体を対象とする。
-     */
-    const rangeInLine = (node: Parser.SyntaxNode, line: number, lineLength: number): { start: number; end: number } => ({
-        start: line === node.startPosition.row ? node.startPosition.column : 0,
-        end: line === node.endPosition.row ? node.endPosition.column : lineLength
-    });
-
-    /**
-     * 指定行のうちノードが占める範囲内に現れる、すべての出現位置を一致箇所として登録する。
-     * コメント・マクロ定義値・文字列リテラルのように、
-     * 1行に同じキーワードが複数現れうるノードで共通して使用する。
-     * 行全体ではなくノードの範囲だけを走査することで、
-     * 同一行にある他の一致箇所を重複して登録しないようにしている。
-     */
-    const collectOccurrences = (
-        lineContent: string,
-        line: number,
-        category: DataFlowCategory,
-        functionName: string | undefined,
-        rangeStart: number,
-        rangeEnd: number
-    ): void => {
-        const target = lineContent.slice(rangeStart, rangeEnd);
-
-        if (matchWholeWord) {
-            globalWholeWordRegex.lastIndex = 0;
-            let match: RegExpExecArray | null;
-            while ((match = globalWholeWordRegex.exec(target)) !== null) {
-                matches.push({
-                    fileUri,
-                    line,
-                    charStart: rangeStart + match.index,
-                    charEnd: rangeStart + match.index + match[0].length,
-                    content: lineContent,
-                    category,
-                    functionName
-                });
-                // 空文字に一致した場合の無限ループを防止
-                if (match[0].length === 0) {
-                    globalWholeWordRegex.lastIndex++;
-                }
-            }
-        } else {
-            let idx = target.indexOf(query);
-            while (idx !== -1) {
-                matches.push({
-                    fileUri,
-                    line,
-                    charStart: rangeStart + idx,
-                    charEnd: rangeStart + idx + query.length,
-                    content: lineContent,
-                    category,
-                    functionName
-                });
-                idx = target.indexOf(query, idx + query.length);
-            }
-        }
-    };
-
-    // ノードの範囲そのものを一致箇所として登録する
-    const pushNodeMatch = (target: Parser.SyntaxNode, category: DataFlowCategory, functionName?: string): void => {
-        matches.push({
-            fileUri,
-            line: target.startPosition.row,
-            charStart: target.startPosition.column,
-            charEnd: target.endPosition.column,
-            content: lines[target.startPosition.row],
-            category,
-            functionName
-        });
-    };
-
-    /**
-     * ASTを再帰的に走査する。
-     * @param currentNode 走査中のノード
-     * @param functionName 現在走査している位置が属する関数名（関数外では undefined）
-     */
-    function traverse(currentNode: Parser.SyntaxNode, functionName?: string) {
-        // 関数定義に入った時点で、以降の子孫ノードが属する関数名を確定させる
-        if (currentNode.type === 'function_definition') {
-            const declarator = currentNode.childForFieldName('declarator');
-            functionName = (declarator && extractFunctionName(declarator)) || functionName;
-        }
-
-        // コメントノード（複数行コメントは行単位に分割し、実際の出現行を特定する）
-        if (currentNode.type === 'comment' && containsMatch(currentNode.text)) {
-            const startRow = currentNode.startPosition.row;
-
-            currentNode.text.split(/\r?\n/).forEach((commentLine, offset) => {
-                if (!containsMatch(commentLine)) {
-                    return;
-                }
-                const actualLine = startRow + offset;
-                const lineContent = lines[actualLine];
-
-                if (lineContent) {
-                    const { start, end } = rangeInLine(currentNode, actualLine, lineContent.length);
-                    collectOccurrences(lineContent, actualLine, 'コメント', functionName, start, end);
-                } else {
-                    matches.push({
-                        fileUri,
-                        line: actualLine,
-                        charStart: 0,
-                        charEnd: commentLine.length,
-                        content: commentLine,
-                        category: 'コメント',
-                        functionName
-                    });
-                }
-            });
-            return; // コメントの子ノードは探索不要
-        }
-
-        // 構造体メンバーアクセスや配列アクセスの判定 (クエリに記号が含まれる場合のみ)
-        if (hasOperator && (currentNode.type === 'field_expression' || currentNode.type === 'subscript_expression')) {
-            if (isNodeMatch(currentNode.text)) {
-                pushNodeMatch(currentNode, classifyIdentifier(currentNode), functionName);
-                // 重複して子ノード（オブジェクト名やメンバー名単体）がヒットするのを防ぐため、巡回をスキップ
-                return;
-            }
-        }
-
-        // 識別子、構造体メンバー名の部分一致 / 完全一致
-        if (currentNode.type === 'identifier' || currentNode.type === 'field_identifier') {
-            if (isNodeMatch(currentNode.text)) {
-                pushNodeMatch(currentNode, classifyIdentifier(currentNode), functionName);
-            }
-        }
-
-        // マクロ定義の置き換え値（右辺）の部分一致 / 単語全体一致（複数マッチに対応）
-        if (currentNode.type === 'preproc_arg' && containsMatch(currentNode.text)) {
-            const row = currentNode.startPosition.row;
-            const lineContent = lines[row];
-            if (lineContent) {
-                const { start, end } = rangeInLine(currentNode, row, lineContent.length);
-                collectOccurrences(lineContent, row, classifyIdentifier(currentNode), functionName, start, end);
-            }
-        }
-
-        // 文字列リテラル内のテキスト部分一致 / 単語全体一致 (入力として扱う、複数マッチに対応)
-        if (currentNode.type === 'string_literal' && containsMatch(currentNode.text)) {
-            const row = currentNode.startPosition.row;
-            const lineContent = lines[row];
-            if (lineContent) {
-                const { start, end } = rangeInLine(currentNode, row, lineContent.length);
-                collectOccurrences(lineContent, row, '入力', functionName, start, end);
-            }
-        }
-
-        // 子ノードを再帰的に走査（所属関数名を引き継ぐ）
-        for (let i = 0; i < currentNode.childCount; i++) {
-            traverse(currentNode.child(i)!, functionName);
-        }
+    const offsets = collectOffsets(content, query, matchWholeWord);
+    if (offsets.length === 0) {
+        return [];
     }
 
-    traverse(node);
+    const lineStarts = buildLineStarts(content);
+    const matches: GrepMatch[] = [];
+
+    for (const offset of offsets) {
+        // 一致範囲を含む最小のノードを特定する
+        const node = tree.rootNode.descendantForIndex(offset, offset + query.length - 1);
+        const row = rowAt(lineStarts, offset);
+
+        matches.push({
+            fileUri,
+            line: row,
+            charStart: offset - lineStarts[row],
+            charEnd: offset - lineStarts[row] + query.length,
+            content: lines[row],
+            category: categorizeNode(node),
+            functionName: findEnclosingFunctionName(node)
+        });
+    }
+
     return matches;
 }
