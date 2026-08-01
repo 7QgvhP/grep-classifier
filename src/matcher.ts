@@ -22,6 +22,29 @@ function escapeRegExp(str: string): string {
 }
 
 /**
+ * 単語文字の定義（Unicode対応）。
+ * JavaScript の `\w` および `\b` は単語文字を ASCII に限定するため、
+ * 日本語を含む検索語では単語境界を正しく判定できない。
+ */
+const WORD_CHAR = '[\\p{L}\\p{N}\\p{M}_]';
+
+/**
+ * 単語全体一致用の正規表現を組み立てる。
+ * `\b` と同じ「単語文字と非単語文字の境界」という意味を保ったまま、
+ * 単語文字の定義のみを Unicode 対応に置き換える。
+ * これにより VS Code の検索（ripgrep）の単語一致と同じ結果になる。
+ */
+function buildWholeWordRegex(query: string): RegExp {
+    const isWordChar = (char: string): boolean => new RegExp(`^${WORD_CHAR}$`, 'u').test(char);
+
+    // 検索語の先頭が単語文字なら直前は非単語文字、非単語文字なら直前は単語文字であること
+    const prefix = isWordChar(query[0]) ? `(?<!${WORD_CHAR})` : `(?<=${WORD_CHAR})`;
+    const suffix = isWordChar(query[query.length - 1]) ? `(?!${WORD_CHAR})` : `(?=${WORD_CHAR})`;
+
+    return new RegExp(`${prefix}${escapeRegExp(query)}${suffix}`, 'gu');
+}
+
+/**
  * ファイル本文から検索キーワードの出現位置をすべて列挙する。
  * ここがVS Code標準検索（grep）と同一の処理であり、
  * 以降の分類は「列挙された位置」に対して行うため、取りこぼしが起きない。
@@ -33,7 +56,7 @@ function collectOffsets(content: string, query: string, matchWholeWord: boolean)
     }
 
     if (matchWholeWord) {
-        const regex = new RegExp(`\\b${escapeRegExp(query)}\\b`, 'g');
+        const regex = buildWholeWordRegex(query);
         let match: RegExpExecArray | null;
         while ((match = regex.exec(content)) !== null) {
             offsets.push(match.index);
