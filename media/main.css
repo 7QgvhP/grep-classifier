@@ -72,11 +72,17 @@ body {
     flex-shrink: 0;
     align-self: center;
 }
-/* 「関数名一覧を表示」ボタンのアイコン（数学表記の f(x)） */
+/* 「関数名一覧を表示」ボタンのアイコン（Excelの数式ボタンと同じ fx 表記） */
 .icon-function {
     font-family: "Times New Roman", Georgia, serif;
-    font-size: 12px;
+    font-size: 14px;
     font-style: italic;
+    font-weight: bold;
+}
+/* fx の x（下付き部分）は直立させて字形を安定させる */
+.icon-function-sub {
+    font-family: "Times New Roman", Georgia, serif;
+    font-size: 9px;
     font-weight: bold;
 }
 .toggle-button.active {
