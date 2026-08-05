@@ -72,6 +72,13 @@ body {
     flex-shrink: 0;
     align-self: center;
 }
+/* 「関数名一覧を表示」ボタンのアイコン（数学表記の f(x)） */
+.icon-function {
+    font-family: "Times New Roman", Georgia, serif;
+    font-size: 12px;
+    font-style: italic;
+    font-weight: bold;
+}
 .toggle-button.active {
     background-color: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.2));
     border-color: var(--vscode-inputOption-activeBorder, #007acc);
