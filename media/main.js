@@ -253,7 +253,7 @@
         functions.forEach((m, name) => {
             html += `
                         <div class="match-item function-item" data-action="open" data-uri="${m.fileUriStr}" data-line="${m.line}" data-start="${m.charStart}" data-end="${m.charEnd}">
-                            <span class="match-function" title="最初の一致箇所へジャンプします">${escapeHtml(name)}()</span>
+                            <span class="match-function" title="最初の一致箇所へジャンプします">${escapeHtml(name)}</span>
                         </div>`;
         });
         return { html, count: functions.size };

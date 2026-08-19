@@ -201,7 +201,7 @@ function buildSummaryContent(
 
         push(`■ ${category.name} (${list.length}件 / ${functions.size}関数)`);
         for (const [name, match] of functions) {
-            push(`    ${name}()`, {
+            push(`    ${name}`, {
                 uri: match.fileUri,
                 line: match.line,
                 charStart: match.charStart,
