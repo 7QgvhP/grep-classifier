@@ -84,14 +84,14 @@ function buildContent(
             const functionWidth = showFunction
                 ? Math.min(
                     FUNCTION_NAME_MAX,
-                    Math.max(0, ...sorted.map(item => (item.functionName ? item.functionName.length + 2 : 0)))
+                    Math.max(0, ...sorted.map(item => (item.functionName ? item.functionName.length : 0)))
                 )
                 : 0;
 
             for (const item of sorted) {
                 const number = String(item.line + 1).padStart(numberWidth);
                 const functionLabel = functionWidth > 0
-                    ? '  ' + truncate(item.functionName ? `${item.functionName}()` : '', functionWidth).padEnd(functionWidth)
+                    ? '  ' + truncate(item.functionName ?? '', functionWidth).padEnd(functionWidth)
                     : '';
                 push(`${rowPad}${number}:${functionLabel}  ${item.content.trim()}`, {
                     uri: item.fileUri,

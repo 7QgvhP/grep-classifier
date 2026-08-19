@@ -217,7 +217,7 @@
         const itemsHtml = sorted.map(m => {
             // 所属関数が判明している場合のみ関数名を表示する（グローバル定義やマクロでは非表示）
             const functionLabel = showFunction && m.functionName
-                ? `<span class="match-function" title="所属関数: ${escapeHtml(m.functionName)}">${escapeHtml(m.functionName)}()</span>`
+                ? `<span class="match-function" title="所属関数: ${escapeHtml(m.functionName)}">${escapeHtml(m.functionName)}</span>`
                 : '';
             return `
                                 <div class="match-item" data-action="open" data-uri="${fileGroup.uriStr}" data-line="${m.line}" data-start="${m.charStart}" data-end="${m.charEnd}">
